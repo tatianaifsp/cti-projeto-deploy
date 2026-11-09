@@ -1,0 +1,20 @@
+/* style.css — o único arquivo de CSS do projeto. */
+@import "tailwindcss"; /* liga o Tailwind: todas as classes (flex, p-4, bg-azul...) passam a existir */
+
+@theme { /* @theme: aqui criamos as cores do SENAI; o Tailwind gera bg-azul, text-azul, border-azul... */
+  --color-azul: #0060a9; /* azul SENAI */
+  --color-azul-escuro: #003e73; /* azul escuro (títulos e rodapé) */
+  --color-azul-claro: #e6f0f8; /* fundo suave */
+  --color-vermelho: #d71920; /* vermelho SENAI (destaques e erros) */
+  --color-laranja: #f7941d; /* laranja (avisos) */
+  --color-verde: #1f8a4c; /* verde (sucesso) */
+  --color-cinza: #52606d; /* texto secundário */
+  --color-fundo: #f4f6f8; /* fundo das páginas */
+  --font-sans: "Barlow", system-ui, sans-serif; /* fonte do texto */
+}
+
+body { /* estilo do corpo da página inteira */
+  background: var(--color-fundo); /* cinza clarinho */
+  color: #1f2933; /* texto quase preto */
+  font-family: var(--font-sans); /* usa a fonte definida acima */
+}

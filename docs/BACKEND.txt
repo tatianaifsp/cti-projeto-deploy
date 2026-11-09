@@ -1,0 +1,1080 @@
+==========================================================================================
+BACKEND (Spring Boot 3.5 + Java 21): LOGIN COM JWT, UPLOAD VALIDADO E ENVIO AO PYTHON
+==========================================================================================
+
+O backend faz só TRÊS coisas:
+  1. LOGIN: cadastro, login com senha criptografada (BCrypt) e token JWT. Grava só a tabela "usuario".
+  2. VALIDAR: confere campo a campo cada linha da planilha (DTO + ClienteValidacaoService).
+  3. ENCAMINHAR: manda as linhas válidas ao Python (PythonEtlService). O Python é quem grava os dados.
+PASTAS (src/main/java/com/cti/provedor/):
+  controller/  recebe as requisições HTTP e expõe os endpoints       (AuthController, AdminUsuarioController, UploadController)
+  service/     regras de negócio: valida, criptografa senha, orquestra  (AuthService, ClienteValidacaoService, UploadService, PythonEtlService...)
+  repository/  fala com o banco via Spring Data JPA                   (UsuarioRepository)
+  model/       entidade que representa a tabela no PostgreSQL          (Usuario)
+  dto/         formato dos dados que entram/saem da API, com validação (ClienteDTO, UploadDtos, AuthDtos)
+  config/      Spring Security e token JWT                            (SecurityConfig, JwtService...)
+  resources/application.properties   conexão com o banco (Neon ou Azure) e outras configurações
+O backend NÃO tem model nem repository de upload. Linhas com erro NÃO são gravadas: voltam na resposta em "rejeitadas".
+
+Mapa do backend: o que é cada arquivo (em uma frase)
+
+Para ligar e configurar
+- CtiProvedorApplication — o botão "ligar" do backend (main).
+- application.properties — as configurações: porta, banco, JWT, CORS, endereço do Python.
+- schema.sql — cria as tabelas no banco ao ligar.
+- pom.xml — lista as bibliotecas que o Maven baixa.
+
+Upload (o coração do projeto) — o fluxo é: UploadController → UploadService → ClienteValidacaoService → PythonEtlService
+- controller/UploadController — recebe o POST do front.
+- service/UploadService — separa linhas válidas e rejeitadas e envia as válidas.
+- service/ClienteValidacaoService — valida cada campo de cada linha.
+- service/PythonEtlService — envia as linhas válidas ao Python (POST /etl).
+- dto/UploadDtos, dto/ClienteDTO — o formato do JSON do upload e de uma linha.
+- service/Colunas, service/Padronizacao — ajudas da validação (nomes das colunas e padronização de texto).
+
+Login (JWT)
+- controller/AuthController + service/AuthService — cadastro e login.
+- controller/AdminUsuarioController + service/UsuarioService — o administrador aprova ou bloqueia usuários.
+- model/Usuario, model/PerfilUsuario, model/StatusUsuario, repository/UsuarioRepository — a tabela usuario.
+- dto/AuthDtos, dto/UsuarioDto — formatos do login, do cadastro e do usuário na resposta.
+- config/SecurityConfig, config/JwtService, config/JwtAuthenticationFilter, config/UsuarioDetailsService — segurança e token.
+- config/AdminInicial — cria o primeiro administrador.
+
+Apoio
+- controller/ErroHandler + config/ApiException — todo erro volta como {"erro": "mensagem"}.
+- config/AppProperties — lê as configurações do application.properties.
+- service/Datas — ajuda com datas.
+
+Dica para estudar: comece pelo UploadController e siga a chamada. Cada arquivo tem no topo um quadro SIMPLES dizendo o que é, o que faz e quem chama.
+
+O CAMINHO DE UM UPLOAD
+  POST /api/uploads/validadas  (UploadController)
+     -> UploadService.receberValidadas()      confere o limite de linhas e monta os ClienteDTO
+     -> ClienteValidacaoService.validar()     valida cada linha (campo obrigatório, nível A/B/C, número, data, UF...)
+     -> linhas com erro  => lista "rejeitadas" (só informa o usuário)
+     -> linhas válidas   => PythonEtlService.enviar()  =>  POST http://PYTHON/etl
+     -> Python responde 200 {ok: true}  => o backend responde 201 ao front com as contagens.
+  Erros: 400 (sem linhas), 401 (sem token), 422 (nenhuma válida ou acima do limite),
+         502 (Python respondeu erro), 503 (Python desligado).
+
+ETAPA 1 - Instalar e configurar
+  Java 21 e Maven 3.9+.   Confira:  java -version   e   mvn -v
+  cd backend
+  copy .env.example .env      (Mac/Linux: cp .env.example .env)
+  Preencha no .env: DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET (32+ caracteres), CORS_ORIGINS, ETL_URL, ETL_KEY.
+
+BANCO NEON (em vez do Azure)
+  O link do Neon tem este formato:
+     postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require&channel_binding=require
+  Copie para o backend/.env assim (NÃO cole o link inteiro):
+     DB_URL=jdbc:postgresql://HOST/BANCO?sslmode=require        (sem usuário, sem senha, sem channel_binding)
+     DB_USER=USUARIO
+     DB_PASSWORD=SENHA
+  Exemplo: DB_URL=jdbc:postgresql://ep-nome-123456.sa-east-1.aws.neon.tech/neondb?sslmode=require
+  O Neon "dorme" quando fica parado: o primeiro pedido pode demorar uns segundos. É normal.
+  O Neon não precisa de firewall. Nunca coloque o link (ele tem a senha) no Git nem em conversa.
+
+ETAPA 2 - Rodar
+  mvn spring-boot:run
+  Espere "Started CtiInsightsApplication".  Teste:  http://localhost:8080/api/health  ->  {"status":"ok"}
+  Na primeira vez ele CRIA as tabelas (arquivo src/main/resources/schema.sql) e o administrador
+  admin@cti.local / Admin@12345 (troque no .env: ADMIN_EMAIL e ADMIN_PASSWORD).
+
+ETAPA 3 - As rotas
+  POST /api/auth/register         todos      cria conta (fica PENDENTE até o ADMIN aprovar)
+  POST /api/auth/login            todos      devolve o token JWT
+  GET  /api/auth/me               logado     confere o token
+  GET  /api/health                todos      está de pé?
+  GET  /api/admin/usuarios        ADMIN      lista usuários        PATCH /api/admin/usuarios/{id}/status  aprova/bloqueia
+  POST /api/uploads/validadas     logado     valida e encaminha ao Python
+
+ETAPA 4 - Deploy (variáveis de ambiente do serviço, as mesmas do .env)
+  DB_URL=jdbc:postgresql://SEU-SERVIDOR.postgres.database.azure.com:5432/ctiinsights?sslmode=require
+  DB_USER / DB_PASSWORD / JWT_SECRET (invente um segredo longo) / CORS_ORIGINS=https://SEU-FRONT (sem barra no final)
+  ETL_URL=https://SEU-PYTHON/etl      ETL_KEY=mesma chave do ETL_API_KEY do Python
+  PORT é lido sozinho (server.port usa SERVER_PORT ou PORT).
+  Gerar o arquivo:  mvn clean package -DskipTests   ->  target/cti-provedor-api.jar
+  Rodar o arquivo:  java -jar target/cti-provedor-api.jar
+  No firewall do PostgreSQL do Azure libere o IP do serviço do backend (e do Python).
+
+ETAPA 5 - Conferir antes do deploy
+  [ ] mvn clean package termina com BUILD SUCCESS
+  [ ] /api/health responde ok
+  [ ] login do admin devolve token (python testes/testar_tudo.py)
+  [ ] upload de teste devolve 201 (python testes/testar_tudo.py --gravar, com o Python ligado)
+
+##########################################################################################
+CÓDIGO COMPLETO (cada linha tem comentário na frente)
+##########################################################################################
+
+ARQUIVO: backend/.env.example
+Configuração
+------------------------------------------------------------------------------------------
+# Copie para ".env" nesta pasta (backend/.env). O Spring Boot lê este arquivo sozinho.
+
+# ---- Banco PostgreSQL (Neon ou Azure) ----
+# NEON: no link do Neon  postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require&channel_binding=require
+#   DB_URL      = jdbc:postgresql://HOST/BANCO?sslmode=require      (sem usuário, sem senha e SEM channel_binding)
+#   DB_USER     = USUARIO        DB_PASSWORD = SENHA
+# Exemplo: DB_URL=jdbc:postgresql://ep-nome-123456.sa-east-1.aws.neon.tech/neondb?sslmode=require
+# Troque SEU-SERVIDOR, o usuário e a senha pelos do seu servidor PostgreSQL no Azure.
+DB_URL=jdbc:postgresql://SEU-SERVIDOR.postgres.database.azure.com:5432/ctiinsights?sslmode=require
+DB_USER=ctiadmin
+DB_PASSWORD=troque-esta-senha
+
+# ---- Segurança ----
+# Segredo que assina o token JWT (mínimo 32 caracteres). Invente o seu.
+JWT_SECRET=invente-um-segredo-com-pelo-menos-32-caracteres
+# Endereço do front (o Vite). Só ele pode chamar a API.
+CORS_ORIGINS=http://localhost:5173
+
+# ---- Administrador (criado sozinho na primeira vez) ----
+ADMIN_EMAIL=admin@cti.local
+ADMIN_PASSWORD=Admin@12345
+
+# ---- Python (ETL) ----
+# Depois de cada upload, o Spring ENVIA as linhas válidas ao serviço Python (API FastAPI); o Python limpa, calcula e grava no Azure.
+# Ligue o Python ANTES de enviar uma planilha:  cd ../analytics-python  e  uvicorn api:app --port 8000
+ETL_URL=http://localhost:8000/etl
+# Chave combinada com o Python (ETL_API_KEY no analytics-python/.env). Vazio = sem chave (só para estudar).
+ETL_KEY=
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/pom.xml
+As bibliotecas
+------------------------------------------------------------------------------------------
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion> <!-- versão do formato do pom (sempre 4.0.0) -->
+
+  <!-- O 'pai': traz o Spring Boot com as versões certas de todas as bibliotecas -->
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>3.5.6</version> <!-- versão do Spring Boot -->
+    <relativePath/>
+  </parent>
+
+  <!-- Identidade do nosso projeto -->
+  <groupId>com.cti</groupId>
+  <artifactId>cti-provedor-api</artifactId> <!-- nome do projeto -->
+  <version>1.0.0</version> <!-- versão do nosso projeto -->
+  <name>cti-provedor-api</name>
+  <description>API do CTI Provedor: login JWT, validação da planilha e envio ao Python</description>
+
+  <properties>
+    <java.version>21</java.version> <!-- usa o Java 21 -->
+    <jjwt.version>0.12.6</jjwt.version> <!-- versão da biblioteca de token JWT -->
+  </properties>
+
+  <!-- Bibliotecas que o projeto usa (o Maven baixa sozinho) -->
+  <dependencies>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency> <!-- cria a API: controllers e rotas HTTP -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-security</artifactId></dependency> <!-- segurança: login, BCrypt e quem pode entrar -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-jpa</artifactId></dependency> <!-- acesso ao banco (model e repository) -->
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency> <!-- validações dos DTOs (@NotBlank, @Email...) -->
+
+    <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency> <!-- driver que conversa com o PostgreSQL (Neon/Azure) -->
+
+    <!-- JWT -->
+    <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-api</artifactId><version>${jjwt.version}</version></dependency> <!-- cria e lê o token JWT -->
+    <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-impl</artifactId><version>${jjwt.version}</version><scope>runtime</scope></dependency> <!-- parte interna do JWT -->
+    <dependency><groupId>io.jsonwebtoken</groupId><artifactId>jjwt-jackson</artifactId><version>${jjwt.version}</version><scope>runtime</scope></dependency> <!-- JWT lê e escreve JSON -->
+  </dependencies>
+
+  <!-- Como gerar o arquivo final (mvn clean package) -->
+  <build>
+    <finalName>cti-provedor-api</finalName> <!-- nome do arquivo gerado: target/cti-provedor-api.jar -->
+    <resources>
+      <resource><directory>src/main/resources</directory></resource> <!-- inclui application.properties e schema.sql -->
+    </resources>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId> <!-- empacota tudo num .jar que roda com java -jar -->
+      </plugin>
+    </plugins>
+  </build>
+</project>
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/resources/application.properties
+Configuração do Spring
+------------------------------------------------------------------------------------------
+# Configuração do CTI Provedor API (roda no seu computador).
+# Os valores vêm do arquivo backend/.env (copie de .env.example). Se não existir, valem os padrões depois dos ":".
+
+# ---- Servidor web ----
+server.port=${SERVER_PORT:${PORT:8080}}
+# não mostra a mensagem nem a pilha de erro técnica ao usuário
+server.error.include-message=never
+server.error.include-stacktrace=never
+
+# ---- Spring ----
+# lê o arquivo .env desta pasta (backend/.env)
+spring.config.import=optional:file:.env[.properties]
+# nome da aplicação
+spring.application.name=cti-provedor-api
+
+# ---- Banco PostgreSQL (Neon ou Azure) ----
+# Neon:  jdbc:postgresql://HOST/BANCO?sslmode=require    Azure: jdbc:postgresql://SERVIDOR.postgres.database.azure.com:5432/BANCO?sslmode=require
+spring.datasource.url=${DB_URL:jdbc:postgresql://localhost:5432/ctiinsights}
+# usuário do banco
+spring.datasource.username=${DB_USER:cti}
+# senha do banco
+spring.datasource.password=${DB_PASSWORD:cti123}
+# pool de conexões: no máximo 5 abertas (o Neon grátis tem limite)
+spring.datasource.hikari.maximum-pool-size=5
+# renova cada conexão a cada 4 minutos (o Neon suspende o banco quando fica parado)
+spring.datasource.hikari.max-lifetime=240000
+
+# ---- JPA (acesso ao banco) ----
+# não deixa a conexão aberta durante a tela
+spring.jpa.open-in-view=false
+# as tabelas vêm do schema.sql (o Hibernate não cria nada)
+spring.jpa.hibernate.ddl-auto=none
+# horário em UTC
+spring.jpa.properties.hibernate.jdbc.time_zone=UTC
+
+# ---- Criação das tabelas ao ligar ----
+# schema.sql usa CREATE TABLE IF NOT EXISTS, então pode rodar sempre
+spring.sql.init.mode=always
+spring.sql.init.schema-locations=classpath:schema.sql
+
+# ---- JWT (token de login) ----
+# segredo que assina o token (mínimo 32 caracteres; troque em produção)
+app.jwt.secret=${JWT_SECRET:troque-este-segredo-em-producao-0123456789}
+# quanto tempo o token vale (minutos)
+app.jwt.expiration-minutes=${JWT_EXPIRATION_MINUTES:480}
+
+# ---- CORS: quem pode chamar a API ----
+# endereço do front-end
+app.cors.origins=${CORS_ORIGINS:http://localhost:5173}
+
+# ---- Administrador criado na primeira vez ----
+app.admin.nome=${ADMIN_NOME:Administrador}
+app.admin.email=${ADMIN_EMAIL:admin@cti.local}
+app.admin.senha=${ADMIN_PASSWORD:Admin@12345}
+
+# ---- Upload ----
+# máximo de linhas por planilha
+app.upload.max-linhas=${UPLOAD_MAX_LINHAS:5000}
+
+# ---- Ligação com o Python (ETL) ----
+# endereço do POST /etl no Python
+app.etl.url=${ETL_URL:http://localhost:8000/etl}
+# chave combinada com o Python (vazia = sem chave)
+app.etl.key=${ETL_KEY:}
+
+# ---- Mensagens no terminal ----
+logging.level.root=INFO
+logging.level.com.cti.provedor=INFO
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/CtiProvedorApplication.java
+Liga o backend
+------------------------------------------------------------------------------------------
+package com.cti.provedor;                                // pacote desta classe
+// ============================================================================
+// SIMPLES: O botão LIGAR do backend.
+// Tem o método main: o Java começa a rodar por aqui e o Spring Boot liga o servidor.
+// Quem usa: você, ao rodar 'mvn spring-boot:run'.
+// ============================================================================
+
+import com.cti.provedor.config.AppProperties;                      // import: a configuração AppProperties
+import org.springframework.boot.SpringApplication;                               // import: traz a classe que liga o Spring Boot
+import org.springframework.boot.autoconfigure.SpringBootApplication;             // import: traz a anotação que ativa a configuração automática
+import org.springframework.boot.context.properties.ConfigurationPropertiesScan;  // import: traz a anotação que lê a seção "app" do application.properties
+
+@SpringBootApplication                                                           // diz: esta é a aplicação Spring Boot (liga tudo sozinho)
+@ConfigurationPropertiesScan                                                     // procura as classes de configuração (AppProperties)
+public class CtiProvedorApplication {                                            // classe principal do backend
+    public static void main(String[] args) {                                     // main: o Java começa a executar por aqui
+        SpringApplication.run(CtiProvedorApplication.class, args);               // sobe o servidor web na porta 8080
+    }                                                                            // fecha o bloco
+}                                                                                // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/controller/UploadController.java
+Recebe o POST do upload
+------------------------------------------------------------------------------------------
+package com.cti.provedor.controller;                     // pacote desta classe
+// ============================================================================
+// SIMPLES: Porta de entrada do UPLOAD.
+// POST /api/uploads/validadas recebe as linhas do front e entrega ao UploadService.
+// Chama: UploadService.
+// ============================================================================
+
+import com.cti.provedor.dto.UploadDtos.EnvioValidadasRequest;                // import: formato do JSON de envio
+import com.cti.provedor.service.UploadService;                                  // import: serviço de upload
+import java.util.Map;                                                               // import: tipo mapa (JSON de resposta)
+import org.springframework.http.HttpStatus;                                         // import: códigos HTTP
+import org.springframework.web.bind.annotation.*;                                   // import: anotações do Spring MVC
+
+@RestController                                                                     // controller REST de upload
+@RequestMapping("/api/uploads")                                                     // rotas começam com /api/uploads
+public class UploadController {                                                     // classe do controller
+    private final UploadService service;                                            // serviço com a regra de upload
+
+    public UploadController(UploadService service) {                                // construtor: o Spring entrega o serviço
+        this.service = service;                                                     // guarda o serviço de upload
+    }                                                                               // fecha o bloco
+
+    /** Usado pelo front: recebe SOMENTE as linhas já validadas pelo Pinia (JSON). */
+    @PostMapping("/validadas")                                                      // POST /api/uploads/validadas (pode ser testada no Thunder Client)
+    @ResponseStatus(HttpStatus.CREATED)                                             // responde 201 (criado)
+    public Map<String, Object> enviarValidadas(@RequestBody EnvioValidadasRequest pedido) {  // recebe o JSON com as linhas
+        return service.receberValidadas(pedido);                                    // revalida tudo e encaminha ao Python (o Python grava)
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/dto/UploadDtos.java
+Formato do JSON do upload
+------------------------------------------------------------------------------------------
+package com.cti.provedor.dto;                            // pacote desta classe
+// ============================================================================
+// SIMPLES: Formato do JSON do upload.
+// EnvioValidadasRequest = o pacote que o front envia; LinhaEnvio = uma linha dele.
+// Usado por: UploadController e UploadService.
+// ============================================================================
+
+import java.util.List;                                                              // import: tipo lista
+
+public final class UploadDtos {                                                     // DTOs = formatos de JSON que entram e saem da API
+    private UploadDtos() {}                                                         // construtor privado: só agrupa os formatos
+
+    /** Corpo do POST /api/uploads/validadas: só as linhas que o Pinia aprovou no navegador. */
+    public record EnvioValidadasRequest(String arquivoNome, Integer descartadas, List<LinhaEnvio> linhas) {}  // JSON que o front envia: nome do arquivo, quantas linhas descartou e as linhas válidas
+
+    /** Uma linha já conferida pelo front. */
+    public record LinhaEnvio(Integer numeroLinha, String codigoCliente, String nomeCliente, String consultor,  // uma linha já conferida pelo front (todos os campos como texto)
+                             String segmento, String nivelCliente, String faturamentoAnual,  // (continuação) segmento, nível, faturamento
+                             String servicosContratados, String dataContratacao, String cidade, String uf) {}  // (continuação) serviços, data, cidade, uf
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/dto/ClienteDTO.java
+Uma linha de cliente
+------------------------------------------------------------------------------------------
+package com.cti.provedor.dto;                            // pacote desta classe
+// ============================================================================
+// SIMPLES: Uma linha da planilha dentro do Java.
+// Guarda o número da linha e o texto de cada coluna.
+// Usado por: UploadService e ClienteValidacaoService.
+// ============================================================================
+
+import java.util.Map;                                                // import: Map = pares chave/valor (coluna -> texto)
+
+/** Uma linha como chegou do front: o número da linha no Excel e os textos de cada coluna. */
+public record ClienteDTO(int numero, Map<String, String> campos) {}  // record: número da linha + textos de cada coluna
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/service/ClienteValidacaoService.java
+Valida cada campo
+------------------------------------------------------------------------------------------
+package com.cti.provedor.service;                        // pacote desta classe
+// ============================================================================
+// SIMPLES: O VALIDADOR da planilha (campo a campo).
+// Confere cada linha: campos obrigatórios, tamanho, código repetido, segmento, nível A/B/C, faturamento, serviços, data e UF.
+// Chamado por: UploadService. Devolve ERRO, AVISO ou VÁLIDA para cada linha.
+// ============================================================================
+
+import com.cti.provedor.dto.ClienteDTO;                            // import: o formato de dados ClienteDTO
+import com.cti.provedor.service.Padronizacao;                         // import: a ajuda Padronizacao
+import static com.cti.provedor.service.Colunas.*;                                // import estático: usa CODIGO, NOME, TODAS... direto
+
+import java.math.BigDecimal;                                                        // import: BigDecimal = número decimal exato (dinheiro)
+import java.math.RoundingMode;                                                      // import: modo de arredondamento
+import java.time.LocalDate;                                                         // import: LocalDate = data sem hora
+import java.time.format.DateTimeFormatter;                                          // import: formato de data
+import java.time.format.DateTimeParseException;                                     // import: erro ao ler data
+import java.util.*;                                                                 // import: List, Map, Set, Optional, Arrays...
+import java.util.regex.Pattern;                                                     // import: expressões regulares (padrões de texto)
+import org.springframework.stereotype.Service;                                      // import: marca como serviço do Spring
+
+/**
+ * Valida a planilha linha a linha. Aqui só decidimos se a linha PODE entrar (ERRO ou VALIDA).
+ * A padronização (IND. -> Indústria, ANA SOUZA -> Ana Souza...) é responsabilidade do ETL em Python.
+ */
+@Service                                                                            // serviço do Spring
+public class ClienteValidacaoService {                                             // VALIDAÇÃO DA PLANILHA: mesmas regras do Pinia no front
+
+    public record ResultadoLinha(int numero, Map<String, String> valores, List<String> erros, List<String> avisos) {  // resultado de uma linha: número, valores limpos, erros e avisos
+        public boolean valida() {                                                   // válida = não tem nenhum erro
+            return erros.isEmpty();                                                 // devolve true se a lista de erros está vazia
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+
+    private static final Pattern RE_CODIGO = Pattern.compile("^[A-Za-z0-9_-]{1,60}$");  // padrão do código: letras, números, - e _ (até 60)
+    private static final Pattern RE_UF = Pattern.compile("^[A-Za-z]{2}$");          // padrão da UF: 2 letras
+    private static final Pattern DATA_ISO = Pattern.compile("^(\\d{4}-\\d{2}-\\d{2})([T ].*)?$");  // padrão de data ISO: aaaa-mm-dd
+    private static final DateTimeFormatter BR = DateTimeFormatter.ofPattern("d/M/uuuu");  // formato brasileiro: dd/mm/aaaa
+    private static final BigDecimal LIMITE_FATURAMENTO = new BigDecimal("1000000000000"); // 1 trilhão
+    private static final Set<String> NIVEIS = Set.of("A", "B", "C");                // níveis aceitos
+
+    public List<ResultadoLinha> validar(List<ClienteDTO> linhas) {                  // validar: confere todas as linhas
+        List<ResultadoLinha> saida = new ArrayList<>();                             // lista de resultados
+        Map<String, Integer> codigos = new HashMap<>();   // código -> 1ª linha em que apareceu
+        Map<String, Integer> conteudos = new HashMap<>(); // nome|faturamento|data -> 1ª linha
+        Map<String, String> codigoDoConteudo = new HashMap<>();                     // código -> linha onde apareceu (acha duplicados)
+        LocalDate hoje = LocalDate.now();                                           // data de hoje (para o aviso de data no futuro)
+
+        for (ClienteDTO linha : linhas) {                                           // para cada linha da planilha
+            List<String> erros = new ArrayList<>();                                 // erros desta linha (bloqueiam)
+            List<String> avisos = new ArrayList<>();                                // avisos desta linha (não bloqueiam)
+            Map<String, String> valores = new LinkedHashMap<>();                    // valores já limpos
+
+            // 1) texto limpo (sem espaços nas pontas / duplicados) + aviso se havia sujeira
+            for (String campo : TODAS) {                                            // passo 1: para cada uma das 10 colunas
+                String bruto = linha.campos().get(campo);                           // texto como veio
+                String limpo = bruto == null ? "" : bruto.strip().replaceAll("\\s{2,}", " ");  // limpa espaços nas pontas e repetidos
+                if (bruto != null && !limpo.equals(bruto)) {                        // mudou alguma coisa?
+                    avisos.add(campo + ": espaços extras removidos");               // então registra um aviso
+                }                                                                   // fecha o bloco
+                valores.put(campo, limpo);                                          // guarda o valor limpo
+                Integer max = TAMANHO_MAXIMO.get(campo);                            // tamanho máximo dessa coluna
+                if (max != null && limpo.length() > max) {                          // passou do tamanho?
+                    erros.add(campo + ": excede " + max + " caracteres");           // erro
+                    valores.put(campo, limpo.substring(0, max));                    // corta o texto
+                }                                                                   // fecha o bloco
+            }                                                                       // fecha o bloco
+
+            // 2) obrigatórios
+            for (String campo : OBRIGATORIAS) {                                     // passo 2: para cada coluna obrigatória
+                if (valores.get(campo).isEmpty()) erros.add(campo + ": campo obrigatório vazio");  // vazia? então erro
+            }                                                                       // fecha o bloco
+
+            // 3) código: formato e duplicidade
+            String codigo = valores.get(CODIGO);                                    // pega o código
+            if (!codigo.isEmpty()) {                                                // se tem código
+                if (!RE_CODIGO.matcher(codigo).matches()) {                         // formato inválido?
+                    erros.add(CODIGO + ": use apenas letras, números, '-' ou '_'");  // erro de formato
+                }                                                                   // fecha o bloco
+                String chave = codigo.toUpperCase();                                // compara em maiúsculas (cli-1 = CLI-1)
+                Integer primeira = codigos.putIfAbsent(chave, linha.numero());      // guarda a linha; devolve a linha anterior se já existia
+                if (primeira != null) {                                             // já existia?
+                    erros.add(CODIGO + ": código duplicado (já usado na linha " + primeira + ")");  // erro de código duplicado
+                }                                                                   // fecha o bloco
+            }                                                                       // fecha o bloco
+
+            // 3b) segmento: reconhecido (com aviso se for corrigido) ou erro
+            String segmento = valores.get(SEGMENTO);                                // pega o segmento
+            if (!segmento.isEmpty()) {                                              // se preenchido
+                String padrao = Padronizacao.segmento(segmento);                    // procura o nome oficial
+                if (padrao == null) {                                               // não reconhecido?
+                    erros.add(SEGMENTO + ": '" + segmento + "' não reconhecido (use Indústria, Comércio, Serviços, Saúde, Educação ou Tecnologia)");  // erro com a lista dos segmentos aceitos
+                } else if (!padrao.equals(segmento)) {                              // reconhecido, mas escrito diferente
+                    avisos.add(SEGMENTO + ": '" + segmento + "' será padronizado para " + padrao);  // aviso: será padronizado
+                }                                                                   // fecha o bloco
+            }                                                                       // fecha o bloco
+
+            // 3c) consultor: aviso se o nome será ajustado
+            String consultor = valores.get(CONSULTOR);                              // pega o consultor
+            if (!consultor.isEmpty()) {                                             // se preenchido
+                String ajustado = Padronizacao.tituloNome(consultor);               // como ficaria com a padronização
+                if (!ajustado.equals(consultor)) avisos.add(CONSULTOR + ": '" + consultor + "' será padronizado para " + ajustado);  // se muda, avisa
+            }                                                                       // fecha o bloco
+
+            // 4) nível A/B/C
+            String nivel = valores.get(NIVEL);                                      // pega o nível
+            if (!nivel.isEmpty()) {                                                 // se preenchido
+                String maiusculo = nivel.toUpperCase();                             // deixa em maiúscula
+                if (!NIVEIS.contains(maiusculo)) {                                  // não é A, B nem C?
+                    erros.add(NIVEL + ": '" + nivel + "' inválido (use A, B ou C)");  // erro
+                } else if (!maiusculo.equals(nivel)) {                              // era minúscula (a, b, c)
+                    avisos.add(NIVEL + ": '" + nivel + "' será convertido para " + maiusculo);  // aviso: será convertido
+                }                                                                   // fecha o bloco
+            }                                                                       // fecha o bloco
+
+            // 5) faturamento numérico, não negativo
+            String fat = valores.get(FATURAMENTO);                                  // pega o faturamento
+            if (!fat.isEmpty()) {                                                   // se preenchido
+                Optional<BigDecimal> numero = lerDecimal(fat);                      // tenta converter em número
+                if (numero.isEmpty()) {                                             // não é número?
+                    erros.add(FATURAMENTO + ": '" + fat + "' não é um número");     // erro
+                } else if (numero.get().signum() < 0) {                             // negativo?
+                    erros.add(FATURAMENTO + ": não pode ser negativo");             // erro
+                } else if (numero.get().compareTo(LIMITE_FATURAMENTO) >= 0) {       // gigante demais?
+                    erros.add(FATURAMENTO + ": valor acima do permitido");          // erro
+                } else {                                                            // válido:
+                    if (numero.get().signum() == 0) avisos.add(FATURAMENTO + ": valor zerado");  // zero gera só um aviso
+                    valores.put(FATURAMENTO, numero.get().setScale(2, RoundingMode.HALF_UP).toPlainString());  // guarda com 2 casas decimais
+                }                                                                   // fecha o bloco
+            }                                                                       // fecha o bloco
+
+            // 6) serviços (lista separada por ';')
+            String servicos = valores.get(SERVICOS);                                // pega os serviços
+            if (!servicos.isEmpty() && Arrays.stream(servicos.split(";")).allMatch(s -> s.isBlank())) {  // se todos os pedaços separados por ; estão vazios
+                erros.add(SERVICOS + ": nenhum serviço informado");                 // erro
+            }                                                                       // fecha o bloco
+
+            // 7) data de contratação
+            String data = valores.get(DATA);                                        // pega a data
+            if (!data.isEmpty()) {                                                  // se preenchida
+                Optional<LocalDate> d = lerData(data);                              // tenta ler a data
+                if (d.isEmpty() || d.get().getYear() < 1990) {                      // inválida ou anterior a 1990?
+                    erros.add(DATA + ": '" + data + "' não é uma data válida (use dd/mm/aaaa ou aaaa-mm-dd)");  // erro
+                } else {                                                            // válida:
+                    if (d.get().isAfter(hoje)) avisos.add(DATA + ": data no futuro");  // no futuro gera aviso
+                    valores.put(DATA, d.get().toString());                          // guarda no formato aaaa-mm-dd
+                }                                                                   // fecha o bloco
+            }                                                                       // fecha o bloco
+
+            // 8) UF opcional, mas se vier precisa ter 2 letras
+            String uf = valores.get(UF);                                            // pega a UF
+            if (!uf.isEmpty() && !RE_UF.matcher(uf).matches()) {                    // se preenchida e não tem 2 letras
+                erros.add(UF + ": '" + uf + "' inválida (use a sigla com 2 letras)");  // erro
+            }                                                                       // fecha o bloco
+
+            // 9) mesmo cliente com outro código (aviso, não bloqueia)
+            if (!codigo.isEmpty() && !valores.get(NOME).isEmpty()) {                // se tem código e nome
+                String chave = valores.get(NOME).toLowerCase() + "|" + valores.get(FATURAMENTO) + "|" + valores.get(DATA);  // chave = nome + faturamento + data
+                Integer anterior = conteudos.putIfAbsent(chave, linha.numero());    // guarda a linha; devolve a anterior se já existia
+                if (anterior != null && !codigo.equalsIgnoreCase(codigoDoConteudo.get(chave))) {  // já existia com outro código?
+                    avisos.add(NOME + ": possível duplicidade (mesmo nome, faturamento e data da linha " + anterior + ")");  // aviso de possível cliente repetido
+                }                                                                   // fecha o bloco
+                codigoDoConteudo.putIfAbsent(chave, codigo);                        // guarda o código dessa combinação
+            }                                                                       // fecha o bloco
+
+            saida.add(new ResultadoLinha(linha.numero(), valores, erros, avisos));  // guarda o resultado desta linha
+        }                                                                           // fecha o bloco
+        return saida;                                                               // devolve todos os resultados
+    }                                                                               // fecha o bloco
+
+    /** Aceita 1850000, 1850000.50, 1.850.000,50, R$ 1.850.000,50. */
+    static Optional<BigDecimal> lerDecimal(String texto) {                          // lerDecimal: aceita 1850000, 1.850.000,50 e R$ 1.850.000,50
+        String t = texto.replace("R$", "").replace(' ', ' ').replaceAll("\\s", "");  // tira "R$" e espaços
+        if (t.isEmpty() || !t.matches("^-?[0-9.,]+$")) return Optional.empty();     // se sobrou algo que não é número, devolve vazio
+        boolean ponto = t.contains("."), virgula = t.contains(",");                 // tem ponto? tem vírgula?
+        if (ponto && virgula) {                                                     // os dois: o último símbolo é o decimal
+            if (t.lastIndexOf(',') > t.lastIndexOf('.')) t = t.replace(".", "").replace(',', '.');  // vírgula é o decimal: tira os pontos
+            else t = t.replace(",", "");                                            // ponto é o decimal: tira as vírgulas
+        } else if (virgula) {                                                       // só vírgula
+            t = t.chars().filter(c -> c == ',').count() > 1 ? t.replace(",", "") : t.replace(',', '.');  // várias vírgulas = milhar; uma só = decimal
+        } else if (ponto && t.matches("^-?\\d{1,3}(\\.\\d{3})+$")) {                // só ponto: 1.850.000 é milhar
+            t = t.replace(".", "");                                                 // tira os pontos
+        }                                                                           // fecha o bloco
+        try {                                                                       // tenta converter
+            return Optional.of(new BigDecimal(t));                                  // devolve o número
+        } catch (NumberFormatException e) {                                         // deu erro de conversão
+            return Optional.empty();                                                // devolve vazio
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+
+    static Optional<LocalDate> lerData(String texto) {                              // lerData: lê dd/mm/aaaa ou aaaa-mm-dd
+        try {                                                                       // tenta ler
+            var iso = DATA_ISO.matcher(texto);                                      // testa o padrão ISO
+            if (iso.matches()) return Optional.of(LocalDate.parse(iso.group(1)));   // é ISO: converte direto
+            return Optional.of(LocalDate.parse(texto, BR));                         // senão tenta o formato brasileiro
+        } catch (DateTimeParseException e) {                                        // data inexistente (ex.: 31/02)
+            return Optional.empty();                                                // devolve vazio
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/service/UploadService.java
+Separa válidas e rejeitadas e envia ao Python
+------------------------------------------------------------------------------------------
+package com.cti.provedor.service;                        // pacote desta classe
+// ============================================================================
+// SIMPLES: O CÉREBRO do upload.
+// Confere o limite de linhas, chama o validador, separa válidas e rejeitadas e envia só as válidas ao Python.
+// Chamado por: UploadController. Devolve ao front as contagens e as rejeitadas.
+// ============================================================================
+
+import com.cti.provedor.dto.ClienteDTO;                            // import: o formato de dados ClienteDTO
+import static com.cti.provedor.service.Colunas.*;                                // import estático: usa CODIGO, NOME... direto, sem escrever Colunas.
+
+import com.cti.provedor.config.ApiException;                                    // import: nosso erro com código HTTP
+import com.cti.provedor.config.AppProperties;                                   // import: configurações (limite de linhas)
+import com.cti.provedor.dto.UploadDtos.EnvioValidadasRequest;                // import: formato do JSON que o front envia
+import com.cti.provedor.dto.UploadDtos.LinhaEnvio;                           // import: formato de uma linha enviada
+import com.cti.provedor.service.ClienteValidacaoService.ResultadoLinha;         // import: resultado da validação de uma linha
+import java.util.ArrayList;                                                         // import: lista que cresce
+import java.util.LinkedHashMap;                                                     // import: mapa que mantém a ordem
+import java.util.List;                                                              // import: tipo lista
+import com.fasterxml.jackson.databind.JsonNode;                                     // import: JsonNode = um JSON já lido
+import java.util.Map;                                                               // import: tipo mapa
+import org.springframework.http.HttpStatus;                                         // import: códigos HTTP
+import org.springframework.stereotype.Service;                                      // import: marca como serviço do Spring
+
+@Service                                                                            // serviço do Spring
+public class UploadService {                                                        // REGRA DO UPLOAD: valida e ENCAMINHA ao Python (o Java não grava nada)
+    private final ClienteValidacaoService validacao;                               // validador (as mesmas regras do front)
+    private final AppProperties props;                                              // configurações
+    private final PythonEtlService python;                                          // envia os dados ao Python
+
+    public UploadService(ClienteValidacaoService validacao, AppProperties props, PythonEtlService python) {  // construtor: o Spring entrega as peças
+        this.validacao = validacao;                                                 // guarda o validador
+        this.props = props;                                                         // guarda as configurações
+        this.python = python;                                                       // guarda o enviador ao Python
+    }                                                                               // fecha o bloco
+
+    /**
+     * Recebe SÓ as linhas que o Pinia já validou no navegador (as inválidas nem saem do front).
+     * Mesmo assim o Spring confere tudo de novo: nunca se confia apenas no navegador.
+     * "descartadas" é quantas linhas o front deixou de fora; entra na contagem do lote para o relatório.
+     */
+    public Map<String, Object> receberValidadas(EnvioValidadasRequest req) {   // receberValidadas: recebe o JSON do front (ou do Thunder Client)
+        if (req == null || req.linhas() == null || req.linhas().isEmpty()) {        // sem linhas?
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Não há linhas validadas para enviar.");  // erro 400
+        }                                                                           // fecha o bloco
+        if (req.linhas().size() > props.upload().maxLinhas()) {                     // mais linhas que o limite?
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,                 // erro 422
+                    "A planilha passou do limite de " + props.upload().maxLinhas() + " linhas.");  // (continuação da mensagem)
+        }                                                                           // fecha o bloco
+        String nome = nomeSeguro(req.arquivoNome());                                // nome do arquivo sem caracteres perigosos
+        int descartadas = req.descartadas() == null ? 0 : Math.max(0, req.descartadas());  // quantas linhas o front deixou de fora (nunca negativo)
+
+        List<ClienteDTO> brutas = new ArrayList<>(req.linhas().size());             // lista onde vamos colocar as linhas no formato do validador
+        int posicao = 2; // a linha 1 da planilha é o cabeçalho
+        for (LinhaEnvio e : req.linhas()) {                                         // para cada linha recebida
+            Map<String, String> campos = new LinkedHashMap<>();                     // mapa coluna -> texto
+            campos.put(CODIGO, e.codigoCliente());                                  // código do cliente
+            campos.put(NOME, e.nomeCliente());                                      // nome do cliente
+            campos.put(CONSULTOR, e.consultor());                                   // consultor
+            campos.put(SEGMENTO, e.segmento());                                     // segmento
+            campos.put(NIVEL, e.nivelCliente());                                    // nível
+            campos.put(FATURAMENTO, e.faturamentoAnual());                          // faturamento
+            campos.put(SERVICOS, e.servicosContratados());                          // serviços
+            campos.put(DATA, e.dataContratacao());                                  // data
+            campos.put(CIDADE, e.cidade());                                         // cidade
+            campos.put(UF, e.uf());                                                 // uf
+            int numero = e.numeroLinha() == null ? posicao : e.numeroLinha();       // usa o número da linha enviado (ou calcula)
+            brutas.add(new ClienteDTO(numero, campos));                             // guarda a linha na lista
+            posicao++;                                                              // próxima posição
+        }                                                                           // fecha o bloco
+        return registrar(nome, brutas, descartadas);                       // validar de novo e enviar ao Python (o Python grava)
+    }                                                                               // fecha o bloco
+
+    /** Valida de novo e ENCAMINHA as linhas válidas ao Python. Linhas com erro só voltam na resposta ("rejeitadas"). */
+    private Map<String, Object> registrar(String nome, List<ClienteDTO> brutas, int descartadas) {  // registrar: valida de novo e envia
+        List<ResultadoLinha> resultado = validacao.validar(brutas);                 // VALIDAÇÃO NO BACKEND: roda as regras em cada linha
+
+        List<Map<String, Object>> validas = new ArrayList<>();                      // linhas válidas: são as que vão ao Python
+        List<String> rejeitadas = new ArrayList<>();                                // linhas com erro: só informadas ao usuário
+        int comAviso = 0;                                                           // quantas linhas válidas têm aviso
+        for (ResultadoLinha r : resultado) {                                        // para cada resultado da validação
+            if (!r.valida()) {                                                      // linha com erro?
+                rejeitadas.add("Linha " + r.numero() + ": " + String.join(" | ", r.erros()));  // guarda a mensagem para o usuário
+                continue;                                                           // não segue para o Python
+            }                                                                       // fecha o bloco
+            if (!r.avisos().isEmpty()) comAviso++;                                  // conta o aviso
+            validas.add(paraPython(r));                                             // monta a linha no formato do Python
+        }                                                                           // fecha o bloco
+        if (validas.isEmpty()) {                                                    // nenhuma linha válida?
+            throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY,                 // erro 422: nada para enviar
+                    "Nenhuma linha válida. Corrija a planilha e envie novamente.");  // (continuação da mensagem)
+        }                                                                           // fecha o bloco
+
+        int recebidas = resultado.size() + descartadas;                             // total de linhas da planilha (boas + ruins)
+        int invalidas = rejeitadas.size() + descartadas;                            // total de inválidas (as do Spring + as do front)
+        python.enviar(nome, recebidas, invalidas, comAviso, validas);               // ENCAMINHA ao Python, que cria o lote, calcula e grava (não devolve dados)
+        Map<String, Object> saida = new LinkedHashMap<>();                          // resposta ao front
+        saida.put("arquivoNome", nome);                                             // nome do arquivo
+        saida.put("status", "PROCESSADO");                                          // o Python respondeu 200: gravou
+        saida.put("totalLinhas", recebidas);                                        // total de linhas
+        saida.put("linhasValidas", validas.size());                                 // quantas seguiram ao Python
+        saida.put("linhasInvalidas", invalidas);                                    // quantas não seguiram
+        saida.put("rejeitadas", rejeitadas);                                        // motivos das linhas com erro (só informados, não gravados)
+        return saida;                                                               // devolve ao controller
+    }                                                                               // fecha o bloco
+
+    private Map<String, Object> paraPython(ResultadoLinha r) {                    // converte uma linha válida no JSON que o Python espera
+        Map<String, String> v = r.valores();                                        // valores já limpos
+        Map<String, Object> m = new LinkedHashMap<>();                              // mapa campo -> valor (mantém a ordem)
+        m.put("linha", r.numero());                                                 // número da linha no Excel
+        m.put("codigo_cliente", vazioParaNulo(v.get(CODIGO)));                      // código do cliente
+        m.put("nome_cliente", vazioParaNulo(v.get(NOME)));                          // nome do cliente
+        m.put("consultor", vazioParaNulo(v.get(CONSULTOR)));                        // consultor
+        m.put("segmento", vazioParaNulo(v.get(SEGMENTO)));                          // segmento
+        m.put("nivel_cliente", vazioParaNulo(v.get(NIVEL)));                        // nível A, B ou C
+        m.put("faturamento_anual", vazioParaNulo(v.get(FATURAMENTO)));              // faturamento (texto "1850000.00")
+        m.put("servicos_contratados", vazioParaNulo(v.get(SERVICOS)));              // serviços separados por ;
+        m.put("data_contratacao", vazioParaNulo(v.get(DATA)));                      // data aaaa-mm-dd
+        m.put("cidade", vazioParaNulo(v.get(CIDADE)));                              // cidade
+        m.put("uf", vazioParaNulo(v.get(UF)));                                      // UF
+        return m;                                                                   // devolve a linha pronta
+    }                                                                               // fecha o bloco
+
+    private static String vazioParaNulo(String s) {                                 // vazioParaNulo: texto vazio vira nulo no banco
+        return s == null || s.isEmpty() ? null : s;                                 // se é nulo ou vazio, devolve nulo
+    }                                                                               // fecha o bloco
+
+    /** Remove caminho e caracteres estranhos do nome enviado pelo navegador. */
+    private static String nomeSeguro(String original) {                             // nomeSeguro: limpa o nome do arquivo
+        String nome = original == null ? "planilha" : original.replace('\\', '/');  // troca "\" por "/" para tratar caminhos do Windows
+        nome = nome.substring(nome.lastIndexOf('/') + 1).replaceAll("[\\p{Cntrl}]", "").strip();  // fica só com o nome, sem pastas nem caracteres de controle
+        if (nome.isEmpty()) nome = "planilha";                                      // se sobrou nada, usa "planilha"
+        return nome.length() > 255 ? nome.substring(nome.length() - 255) : nome;    // limita a 255 caracteres
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/service/PythonEtlService.java
+Faz o POST /etl no Python
+------------------------------------------------------------------------------------------
+package com.cti.provedor.service;                        // pacote desta classe
+// ============================================================================
+// SIMPLES: A PONTE com o Python.
+// Monta o JSON com as linhas válidas e faz POST /etl na API do Python. Se o Python falhar, avisa o usuário.
+// Chamado por: UploadService. O Java NÃO grava nada do upload: quem grava é o Python.
+// ============================================================================
+
+import com.cti.provedor.config.AppProperties;                                   // import: configurações (endereço e chave do Python)
+import com.cti.provedor.config.ApiException;                                 // import: nosso erro com código HTTP
+import com.fasterxml.jackson.databind.ObjectMapper;                                 // import: ObjectMapper lê e escreve JSON
+import java.io.IOException;                                                         // import: erro de entrada/saída
+import java.net.URI;                                                            // import: URI = endereço da API do Python
+import java.net.http.HttpClient;                                                // import: HttpClient = cliente HTTP do próprio Java
+import java.net.http.HttpRequest;                                               // import: HttpRequest = o pedido
+import java.net.http.HttpResponse;                                              // import: HttpResponse = a resposta
+import java.nio.charset.StandardCharsets;                                           // import: UTF-8 para acentos
+import java.time.Duration;                                                       // import: Duration = tempo máximo de espera
+import java.util.LinkedHashMap;                                                     // import: mapa que mantém a ordem dos campos
+import java.util.List;                                                              // import: tipo lista
+import java.util.Map;                                                               // import: tipo mapa (chave -> valor)
+import org.slf4j.Logger;                                                            // import: Logger escreve no terminal
+import org.slf4j.LoggerFactory;                                                     // import: fábrica de Logger
+import org.springframework.http.HttpStatus;                                         // import: códigos HTTP
+import org.springframework.stereotype.Component;                                    // import: marca como componente do Spring
+
+/**
+ * A PONTE entre o Java e o Python. O Java só valida e ENCAMINHA: o Python cria o lote, limpa, calcula e GRAVA no banco.
+ * Sem model, sem repository: o Java só envia um JSON; o Python grava no banco.
+ */
+@Component                                                                          // componente do Spring
+public class PythonEtlService {                                                     // CHAMA A API DO PYTHON
+    private static final Logger log = LoggerFactory.getLogger(PythonEtlService.class);    // logger desta classe
+
+    private final String url;                                                       // endereço do POST /etl (ETL_URL)
+    private final String chave;                                                     // chave combinada com o Python (ETL_KEY; vazia = sem chave)
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();  // cliente HTTP (espera até 10 s para conectar)
+    private final ObjectMapper json;                                                // lê e escreve JSON
+
+    public PythonEtlService(AppProperties props, ObjectMapper json) {               // construtor: o Spring entrega as peças
+        this.url = props.etl() == null || props.etl().url() == null || props.etl().url().isBlank()  // endereço não configurado?
+                ? "http://localhost:8000/etl" : props.etl().url().trim();           // usa o padrão; senão o configurado
+        this.chave = props.etl() == null || props.etl().key() == null ? "" : props.etl().key().trim();  // lê a chave (pode ser vazia)
+        this.json = json;                                                           // guarda o leitor de JSON
+    }                                                                               // fecha o bloco
+
+    /** Envia as linhas válidas. O Python grava tudo no banco e só responde {ok: true}. */
+    public void enviar(String arquivoNome, int recebidas, int invalidas, int comAviso,  // enviar: manda os dados ao Python
+                           List<Map<String, Object>> linhas) {                      // (continuação) as linhas válidas
+        Map<String, Object> pedido = new LinkedHashMap<>();                         // o pedido completo que vai ao Python
+        pedido.put("arquivoNome", arquivoNome);                                     // nome do arquivo
+        pedido.put("recebidas", recebidas);                                         // total de linhas da planilha (boas + ruins)
+        pedido.put("invalidas", invalidas);                                         // quantas tinham erro (não são enviadas)
+        pedido.put("comAviso", comAviso);                                           // quantas válidas têm aviso
+        pedido.put("linhas", linhas);                                               // as linhas válidas
+        log.info("Enviando {} linhas ao Python: POST {}", linhas.size(), url);      // escreve no terminal
+        try {                                                                       // tenta montar o JSON
+            HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(url))       // monta o pedido para a API do Python
+                    .timeout(Duration.ofMinutes(5))                                 // espera a resposta por até 5 minutos
+                    .header("Content-Type", "application/json; charset=utf-8")      // avisa que o corpo é JSON
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(pedido)));  // POST com o JSON no corpo
+            chamar(req);                                                            // envia e espera o Python gravar (ele só responde ok)
+        } catch (IOException e) {                                                   // não conseguiu montar o JSON
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Erro ao montar o JSON: " + e.getMessage());  // erro 500
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+
+    private void chamar(HttpRequest.Builder req) {                              // chamar: envia o pedido e trata a resposta e os erros
+        if (!chave.isEmpty()) req.header("X-ETL-Key", chave);                       // se há chave, envia no cabeçalho
+        try {                                                                       // tenta falar com o Python
+            HttpResponse<String> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));  // ENVIA e espera a resposta
+            if (resp.statusCode() != 200) {                                         // o Python respondeu erro?
+                throw new ApiException(HttpStatus.BAD_GATEWAY,                      // erro 502 para a tela
+                        "O serviço Python respondeu " + resp.statusCode() + ": " + resp.body());  // (continuação) mostra o motivo
+            }                                                                       // fecha o bloco
+        } catch (IOException e) {                                                   // não conseguiu falar com o Python (serviço desligado?)
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,                  // erro 503 para a tela
+                    "Não foi possível falar com o serviço Python (ele está ligado? uvicorn api:app --port 8000).");  // (continuação) dica
+        } catch (InterruptedException e) {                                          // thread interrompida
+            Thread.currentThread().interrupt();                                     // restaura o sinal de interrupção
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "A chamada ao Python foi interrompida.");  // erro 503
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/controller/AuthController.java
+Login e cadastro
+------------------------------------------------------------------------------------------
+package com.cti.provedor.controller;                     // pacote desta classe
+// ============================================================================
+// SIMPLES: Porta de entrada do login.
+// POST /auth/register (cadastro), POST /auth/login (token), GET /auth/me e GET /health.
+// Chama: AuthService.
+// ============================================================================
+
+import com.cti.provedor.service.AuthService;                       // import: o serviço AuthService
+import com.cti.provedor.dto.AuthDtos.*;                                        // import: os formatos de entrada/saída (CadastroRequest...)
+import com.cti.provedor.dto.UsuarioDto;                                     // import: DTO do usuário
+import com.cti.provedor.service.UsuarioService;                                 // import: serviço de usuários
+import jakarta.validation.Valid;                                                    // import: @Valid ativa as validações do DTO
+import java.util.Map;                                                               // import: tipo mapa
+import org.springframework.http.HttpStatus;                                         // import: códigos HTTP
+import org.springframework.security.core.Authentication;                            // import: usuário logado
+import org.springframework.web.bind.annotation.*;                                   // import: anotações do Spring MVC
+
+@RestController                                                                     // controller REST de cadastro e login
+@RequestMapping("/api")                                                             // rotas começam com /api
+public class AuthController {                                                       // classe do controller
+    private final AuthService auth;                                                 // serviço com a regra de cadastro/login
+    private final UsuarioService usuarios;                                          // serviço de usuários
+
+    public AuthController(AuthService auth, UsuarioService usuarios) {              // construtor: o Spring entrega os serviços
+        this.auth = auth;                                                           // guarda o serviço de autenticação
+        this.usuarios = usuarios;                                                   // guarda o serviço de usuários
+    }                                                                               // fecha o bloco
+
+    @PostMapping("/auth/register")                                                  // POST /api/auth/register: cria conta
+    @ResponseStatus(HttpStatus.CREATED)                                             // responde 201 (criado)
+    public MensagemResponse cadastrar(@Valid @RequestBody CadastroRequest req) {    // @Valid confere os campos; @RequestBody lê o JSON
+        return auth.cadastrar(req);                                                 // cria o usuário como PENDENTE
+    }                                                                               // fecha o bloco
+
+    @PostMapping("/auth/login")                                                     // POST /api/auth/login: entra
+    public LoginResponse entrar(@Valid @RequestBody LoginRequest req) {             // lê e valida o JSON { email, senha }
+        return auth.entrar(req);                                                    // confere a senha e devolve o token JWT
+    }                                                                               // fecha o bloco
+
+    @GetMapping("/auth/me")                                                         // GET /api/auth/me: quem sou eu
+    public UsuarioDto eu(Authentication authentication) {                           // authentication vem do token enviado
+        return UsuarioDto.de(usuarios.atual(authentication));                       // devolve os dados do usuário logado
+    }                                                                               // fecha o bloco
+
+    /** Para testar se o servidor está no ar. */
+    @GetMapping("/health")                                                          // GET /api/health
+    public Map<String, String> saude() {                                            // método da rota de saúde
+        return Map.of("status", "ok");                                              // devolve { "status": "ok" }
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/service/AuthService.java
+Regras do cadastro e do login
+------------------------------------------------------------------------------------------
+package com.cti.provedor.service;                        // pacote desta classe
+// ============================================================================
+// SIMPLES: As regras do cadastro e do login.
+// Cadastro: criptografa a senha (BCrypt) e cria PENDENTE. Login: confere a senha, o status e devolve o token.
+// Chamado por: AuthController.
+// ============================================================================
+
+import com.cti.provedor.dto.UsuarioDto;                            // import: o formato de dados UsuarioDto
+import com.cti.provedor.model.PerfilUsuario;                       // import: a entidade (tabela) PerfilUsuario
+import com.cti.provedor.model.StatusUsuario;                       // import: a entidade (tabela) StatusUsuario
+import com.cti.provedor.model.Usuario;                             // import: a entidade (tabela) Usuario
+import com.cti.provedor.repository.UsuarioRepository;              // import: o repositório (acesso ao banco) UsuarioRepository
+import com.cti.provedor.dto.AuthDtos.*;                                        // import: os formatos de entrada e saída
+import com.cti.provedor.config.ApiException;                                    // import: nosso erro com código HTTP
+import com.cti.provedor.service.Datas;                                           // import: nosso conversor de datas
+import com.cti.provedor.config.JwtService;                                    // import: serviço que cria o token
+import java.nio.charset.StandardCharsets;                                           // import: UTF-8 para medir o tamanho da senha
+import org.springframework.http.HttpStatus;                                         // import: códigos HTTP
+import org.springframework.security.crypto.password.PasswordEncoder;                // import: criptografador de senha
+import org.springframework.stereotype.Service;                                      // import: marca como serviço do Spring
+
+@Service                                                                            // serviço do Spring
+public class AuthService {                                                          // regras de cadastro e login
+    private final UsuarioRepository repo;                                           // repositório de usuários
+    private final PasswordEncoder encoder;                                          // criptografador BCrypt
+    private final JwtService jwt;                                                   // criador de tokens JWT
+
+    public AuthService(UsuarioRepository repo, PasswordEncoder encoder, JwtService jwt) {  // construtor: o Spring entrega as três peças
+        this.repo = repo;                                                           // guarda o repositório
+        this.encoder = encoder;                                                     // guarda o criptografador
+        this.jwt = jwt;                                                             // guarda o serviço de token
+    }                                                                               // fecha o bloco
+
+    /** Cadastro de usuário (perfil USER): nasce PENDENTE e só entra depois que um ADMIN aprovar. */
+    public MensagemResponse cadastrar(CadastroRequest req) {                        // cadastrar: cria a conta como PENDENTE
+        String email = req.email().trim().toLowerCase();                            // e-mail em minúsculo e sem espaços
+        if (req.senha().getBytes(StandardCharsets.UTF_8).length > 72) {             // o BCrypt só aceita até 72 bytes
+            throw new ApiException(HttpStatus.BAD_REQUEST, "A senha é longa demais (limite do BCrypt: 72 bytes).");  // senha longa demais: erro 400
+        }                                                                           // fecha o bloco
+        if (repo.existsByEmailIgnoreCase(email)) {                                  // e-mail já cadastrado?
+            throw new ApiException(HttpStatus.CONFLICT, "Já existe um cadastro com este e-mail.");  // então erro 409 (conflito)
+        }                                                                           // fecha o bloco
+        Usuario u = new Usuario();                                                  // cria o objeto usuário
+        u.setNome(req.nome().trim());                                               // nome sem espaços nas pontas
+        u.setEmail(email);                                                          // e-mail
+        u.setSenhaHash(encoder.encode(req.senha()));                                // guarda a senha CRIPTOGRAFADA (BCrypt), nunca pura
+        u.setMatricula(vazioParaNulo(req.matricula()));                             // matrícula (ou nulo se vazia)
+        u.setTurma(vazioParaNulo(req.turma()));                                     // turma (ou nulo se vazia)
+        u.setPerfil(PerfilUsuario.USER);                                            // todo cadastro novo é USER
+        u.setStatus(StatusUsuario.PENDENTE);                                        // e nasce PENDENTE até o admin liberar
+        u.setCriadoEm(Datas.agoraUtc());                                            // data do cadastro
+        repo.save(u);                                                               // salva no banco PostgreSQL
+        return new MensagemResponse("Cadastro recebido! Você poderá entrar assim que o administrador liberar o seu acesso.");  // devolve a mensagem para a tela
+    }                                                                               // fecha o bloco
+
+    public LoginResponse entrar(LoginRequest req) {                                 // entrar: confere e-mail e senha e devolve o token
+        Usuario u = repo.findByEmailIgnoreCase(req.email().trim()).orElse(null);    // busca o usuário (ou nulo se não existe)
+        // A senha é conferida antes do status, para não revelar quais e-mails existem.
+        if (u == null || !encoder.matches(req.senha(), u.getSenhaHash())) {         // e-mail inexistente ou senha errada
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "E-mail ou senha inválidos.");  // mesma mensagem nos dois casos (não revela quem existe)
+        }                                                                           // fecha o bloco
+        if (u.getStatus() == StatusUsuario.PENDENTE) {                              // conta ainda PENDENTE?
+            throw new ApiException(HttpStatus.FORBIDDEN, "Seu cadastro ainda aguarda a liberação do administrador.");  // erro 403: aguarde a liberação
+        }                                                                           // fecha o bloco
+        if (u.getStatus() == StatusUsuario.BLOQUEADO) {                             // conta BLOQUEADA?
+            throw new ApiException(HttpStatus.FORBIDDEN, "Seu acesso está bloqueado. Fale com o administrador.");  // erro 403: acesso bloqueado
+        }                                                                           // fecha o bloco
+        return new LoginResponse(jwt.gerar(u), "Bearer", jwt.getExpiracaoSegundos(), UsuarioDto.de(u));  // tudo certo: devolve token + dados do usuário
+    }                                                                               // fecha o bloco
+
+    private static String vazioParaNulo(String s) {                                 // devolve nulo se o texto for vazio
+        return s == null || s.isBlank() ? null : s.trim();                          // senão devolve o texto sem espaços nas pontas
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/config/SecurityConfig.java
+Quem pode chamar cada rota
+------------------------------------------------------------------------------------------
+package com.cti.provedor.config;                       // pacote desta classe
+// ============================================================================
+// SIMPLES: As regras de quem pode entrar em cada rota.
+// Libera login, cadastro e health para todos; /api/admin só para ADMIN; o resto exige token. Também liga o CORS (front em outra porta) e o BCrypt.
+// Roda sozinho na inicialização.
+// ============================================================================
+
+import com.cti.provedor.config.AppProperties;                                   // import: configurações (application.properties)
+import java.util.List;                                                              // import: tipo lista
+import org.springframework.context.annotation.Bean;                                 // import: @Bean = objeto criado e guardado pelo Spring
+import org.springframework.context.annotation.Configuration;                        // import: classe de configuração
+import org.springframework.http.HttpMethod;                                         // import: tipos de método HTTP (GET, POST...)
+import org.springframework.security.config.Customizer;                              // import: configuração padrão
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;    // import: HttpSecurity = onde se define quem acessa o quê
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;  // import: liga o Spring Security
+import org.springframework.security.config.http.SessionCreationPolicy;              // import: política de sessão
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;            // import: BCrypt = criptografia de senha
+import org.springframework.security.crypto.password.PasswordEncoder;                // import: interface de criptografia de senha
+import org.springframework.security.web.SecurityFilterChain;                        // import: cadeia de filtros de segurança
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;  // import: filtro padrão de login (nosso filtro vem antes dele)
+import org.springframework.web.cors.CorsConfiguration;                              // import: regras de CORS
+import org.springframework.web.cors.CorsConfigurationSource;                        // import: fonte das regras de CORS
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;                // import: associa regras de CORS a rotas
+
+@Configuration                                                                      // classe de configuração do Spring
+@EnableWebSecurity                                                                  // liga o Spring Security
+public class SecurityConfig {                                                       // SEGURANÇA: define quais rotas são públicas e quais exigem login
+
+    @Bean                                 // @Bean: o Spring guarda o resultado deste método
+    public SecurityFilterChain filtros(HttpSecurity http, JwtService jwtService,    // define a cadeia de filtros da segurança
+                                       UsuarioDetailsService detailsService) throws Exception {  // recebe o HttpSecurity e os serviços do JWT
+        http                                                                        // começa a configurar
+            .csrf(csrf -> csrf.disable())                       // API stateless com JWT, sem cookies de sessão
+            .cors(Customizer.withDefaults())                                        // libera o CORS (front em outra porta)
+            .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))  // sem sessão no servidor: cada pedido traz o token
+            .authorizeHttpRequests(auth -> auth                                     // regras por rota:
+                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()             // o navegador pergunta antes (OPTIONS): sempre liberado
+                .requestMatchers("/api/auth/register", "/api/auth/login", "/api/health").permitAll()  // cadastro, login e health são públicos
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")                  // /api/admin/** só para ADMIN
+                .anyRequest().authenticated())                                      // todo o resto exige login
+            .exceptionHandling(e -> e                                               // respostas de erro de segurança:
+                .authenticationEntryPoint((req, res, ex) -> escreverErro(res, 401, "Faça login para continuar."))  // sem token: 401
+                .accessDeniedHandler((req, res, ex) -> escreverErro(res, 403, "Você não tem permissão para isso.")))  // sem permissão: 403
+            .addFilterBefore(new JwtAuthenticationFilter(jwtService, detailsService),  // coloca o nosso filtro JWT antes do filtro padrão
+                    UsernamePasswordAuthenticationFilter.class);                    // (continuação)
+        return http.build();                                                        // devolve a configuração pronta
+    }                                                                               // fecha o bloco
+
+    /** BCrypt: a senha nunca é guardada em texto puro. */
+    @Bean                                                                           // bean: guarda o criptografador para o resto do projeto usar
+    public PasswordEncoder passwordEncoder() {                                      // método que cria o criptografador
+        return new BCryptPasswordEncoder(10);                                       // BCrypt: a senha vira um código que não volta ao original
+    }                                                                               // fecha o bloco
+
+    @Bean                                                                           // bean: regras de CORS
+    public CorsConfigurationSource corsConfigurationSource(AppProperties props) {   // quais origens (sites) podem chamar a API
+        CorsConfiguration cfg = new CorsConfiguration();                            // cria as regras
+        cfg.setAllowedOrigins(props.cors().origins().stream().map(String::trim).toList());  // lê os endereços permitidos do application.properties
+        cfg.setAllowedMethods(List.of("GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"));  // métodos HTTP permitidos
+        cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));  // cabeçalhos permitidos (inclui o Authorization do token)
+        cfg.setMaxAge(3600L);                                                       // o navegador pode lembrar a resposta por 1 hora
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();  // associa as regras às rotas
+        source.registerCorsConfiguration("/api/**", cfg);                           // vale para todas as rotas /api/**
+        return source;                                                              // devolve as regras
+    }                                                                               // fecha o bloco
+
+    private static void escreverErro(jakarta.servlet.http.HttpServletResponse res, int status, String mensagem)  // escreve uma resposta de erro em JSON
+            throws java.io.IOException {  // pode lançar erro de entrada/saída
+        res.setStatus(status);                                                      // define o código HTTP
+        res.setContentType("application/json;charset=UTF-8");                       // diz que a resposta é JSON
+        res.getWriter().write("{\"erro\":\"" + mensagem + "\"}");                   // escreve {"erro": "mensagem"}
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: backend/src/main/java/com/cti/provedor/config/JwtService.java
+Cria e lê o token JWT
+------------------------------------------------------------------------------------------
+package com.cti.provedor.config;                       // pacote desta classe
+// ============================================================================
+// SIMPLES: Fábrica de token.
+// Cria o token JWT no login e confere se um token é válido.
+// Quem usa: AuthService (criar) e JwtAuthenticationFilter (conferir).
+// ============================================================================
+
+import com.cti.provedor.config.AppProperties;                                   // import: configurações (segredo e validade do token)
+import com.cti.provedor.model.Usuario;                                        // import: a entidade Usuario
+import io.jsonwebtoken.Claims;                                                      // import: Claims = os dados guardados dentro do token
+import io.jsonwebtoken.JwtException;                                                // import: erro de token inválido
+import io.jsonwebtoken.Jwts;                                                        // import: Jwts = fábrica de tokens
+import io.jsonwebtoken.security.Keys;                                               // import: Keys = cria a chave de assinatura
+import java.nio.charset.StandardCharsets;                                           // import: UTF-8 para converter o segredo em bytes
+import java.time.Instant;                                                           // import: Instant = momento no tempo
+import java.util.Date;                                                              // import: Date = data (formato que a biblioteca pede)
+import java.util.Optional;                                                          // import: Optional = resultado que pode não existir
+import javax.crypto.SecretKey;                                                      // import: SecretKey = a chave secreta
+import org.springframework.stereotype.Service;                                      // import: marca como serviço do Spring
+
+/** Gera e valida o token JWT (HS256). */
+@Service                                                                            // serviço do Spring
+public class JwtService {                                                           // cria e confere tokens JWT
+    private final SecretKey chave;                                                  // a chave que assina o token
+    private final long expiracaoSegundos;                                           // quanto tempo o token vale, em segundos
+
+    public JwtService(AppProperties props) {                                        // construtor: lê o segredo do application.properties
+        byte[] segredo = props.jwt().secret().getBytes(StandardCharsets.UTF_8);     // transforma o segredo em bytes
+        if (segredo.length < 32) {                                                  // segredo curto demais é inseguro
+            throw new IllegalStateException("JWT_SECRET precisa ter pelo menos 32 caracteres.");  // então o servidor nem liga, e avisa o motivo
+        }                                                                           // fecha o bloco
+        this.chave = Keys.hmacShaKeyFor(segredo);                                   // cria a chave HMAC a partir do segredo
+        this.expiracaoSegundos = props.jwt().expirationMinutes() * 60;              // minutos viram segundos
+    }                                                                               // fecha o bloco
+
+    public String gerar(Usuario usuario) {                                          // gerar: cria o token do usuário logado
+        Instant agora = Instant.now();                                              // momento atual
+        return Jwts.builder()                                                       // começa a montar o token
+                .subject(usuario.getEmail())                                        // "subject" = e-mail do dono do token
+                .claim("perfil", usuario.getPerfil().name())                        // guarda o perfil (USER ou ADMIN) dentro do token
+                .issuedAt(Date.from(agora))                                         // quando foi criado
+                .expiration(Date.from(agora.plusSeconds(expiracaoSegundos)))        // quando expira
+                .signWith(chave)                                                    // assina com a chave secreta (ninguém consegue falsificar)
+                .compact();                                                         // gera o texto final do token
+    }                                                                               // fecha o bloco
+
+    /** E-mail (subject) do token, ou vazio se o token for inválido ou estiver expirado. */
+    public Optional<String> emailDoToken(String token) {                            // emailDoToken: confere o token e devolve o e-mail
+        try {                                                                       // tenta ler o token
+            Claims claims = Jwts.parser().verifyWith(chave).build().parseSignedClaims(token).getPayload();  // confere a assinatura e a validade; pega os dados
+            return Optional.ofNullable(claims.getSubject());                        // devolve o e-mail (subject)
+        } catch (JwtException | IllegalArgumentException e) {                       // token falso, adulterado ou vencido
+            return Optional.empty();                                                // devolve vazio
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+
+    public long getExpiracaoSegundos() {                                            // devolve a validade para o front
+        return expiracaoSegundos;                                                   // em segundos
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+------------------------------------------------------------------------------------------

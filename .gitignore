@@ -1,0 +1,11 @@
+# Arquivos que não vão para o Git (senhas e pastas geradas)
+.env
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+saida/
+output/
+.idea/
+*.iml

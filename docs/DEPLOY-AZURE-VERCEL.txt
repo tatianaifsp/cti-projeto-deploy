@@ -1,0 +1,377 @@
+=====================================================================
+ DEPLOY NA PRÁTICA · AZURE (PORTAL) + VERCEL · CTI INSIGHTS
+ Projeto Integrador SENAI · ADS
+=====================================================================
+
+Siga na ordem. Marque [x] em cada passo feito.
+Troque SEUNOME pelo seu nome em todos os nomes e endereços
+(o nome precisa ser único na Azure inteira).
+
+Nos campos, troque também:
+  SEGREDO_1    -> o JWT_SECRET que você gerar
+  SEGREDO_2    -> o ETL_KEY que você gerar (o mesmo vale para ETL_API_KEY)
+  SENHA_BANCO  -> a senha que você inventar para o banco
+  SEU_EMAIL    -> o e-mail do admin
+  SENHA_FORTE  -> a senha do admin
+
+SEM TERMINAL DA AZURE: a conta de estudante não tem Cloud Shell.
+Tudo na Azure é feito clicando em portal.azure.com, e o GitHub Actions
+faz o build e publica sozinho a cada git push.
+Se o portal estiver em inglês: Aplicativo Web = Web App,
+Variáveis de ambiente = Environment variables,
+Central de Implantação = Deployment Center.
+
+---------------------------------------------------------------------
+ VISÃO GERAL: O QUE É O DEPLOY
+---------------------------------------------------------------------
+Deploy é tirar o sistema do seu computador e colocar na internet.
+Depois, qualquer pessoa abre um link e usa, com seu PC desligado.
+
+  Parte    Hoje (seu computador)            Depois (internet)
+  -------  -------------------------------  ------------------------------------------
+  Site     npm run dev -> localhost:5173    Vercel -> cti-front-SEUNOME.vercel.app
+  Java     mvn spring-boot:run -> :8080     Azure  -> cti-api-SEUNOME.azurewebsites.net
+  Python   uvicorn -> :8000                 Azure  -> cti-python-SEUNOME.azurewebsites.net
+  Banco    Azure PostgreSQL ou Neon         continua onde está
+
+O .env NÃO vai junto: o que está nele é cadastrado de novo em
+"Variáveis de ambiente" de cada Aplicativo Web.
+
+Ordem: PREPARAR -> VARIÁVEIS (.env) -> BANCO -> PYTHON -> JAVA -> SITE -> CORS -> TESTAR
+
+
+=====================================================================
+ PASSO 0 · PREPARAR
+=====================================================================
+
+--- 0.1 Contas (nada para instalar) --------------------------------
+[ ] Azure for Students (portal.azure.com)
+[ ] GitHub, com o projeto enviado
+[ ] Vercel: vercel.com/signup -> Continue with GitHub -> plano Hobby
+
+--- 0.2 Criar frontend/vercel.json ----------------------------------
+VS Code -> botão direito na pasta frontend -> New File -> vercel.json
+
+  {
+    "rewrites": [
+      { "source": "/(.*)",
+        "destination": "/index.html" }
+    ]
+  }
+
+  "rewrites"      -> lista de regras para "reescrever" o endereço
+  "source"        -> qualquer endereço: /dashboard, /upload, /login...
+  "destination"   -> entrega sempre o index.html (onde o Vue mora)
+  Sem ele, apertar F5 em /dashboard dá 404.
+
+[ ] vercel.json criado dentro de frontend (não na raiz)
+
+--- 0.3 Build de conferência e GitHub (terminal do VS Code) --------
+  cd frontend
+  npm install
+  npm run build                    -> "built in ..." e pasta dist
+  cd ../backend
+  mvn clean package -DskipTests    -> BUILD SUCCESS
+  cd ../analytics-python
+  pip install -r requirements.txt  -> "Successfully installed ..."
+  cd ..
+  git add .
+  git status          <- confira: NENHUM .env na lista
+  git commit -m "Deploy"
+  git push
+
+[ ] Os 3 builds deram certo
+[ ] No GitHub: frontend/vercel.json aparece e NENHUM .env aparece
+
+--- 0.4 Segurança: gerar os segredos (anote num bloco de notas) ----
+  python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+[ ] 1ª vez -> SEGREDO_1 (JWT_SECRET)
+[ ] 2ª vez -> SEGREDO_2 (ETL_KEY = ETL_API_KEY)
+[ ] ADMIN_EMAIL e ADMIN_PASSWORD (8+ caracteres, letras e números)
+[ ] SENHA_BANCO (8+ caracteres, maiúscula, minúscula e número)
+
+
+=====================================================================
+ VARIÁVEIS DE AMBIENTE (.env): O QUE SÃO E ONDE VÃO
+=====================================================================
+O .env guarda o que muda de um lugar para outro: endereço e senha do
+banco, segredos e endereços dos outros serviços. O código só lê o NOME
+da variável; o VALOR fica fora dele.
+
+  .env.example -> modelo SEM senhas, com os nomes. VAI para o GitHub.
+  .env         -> cópia com os valores reais, SÓ no seu computador.
+                  NUNCA vai para o GitHub (o .gitignore impede).
+  Na nuvem     -> os mesmos nomes, cadastrados no painel:
+                  Azure: app -> Configurações -> Variáveis de ambiente
+                  Vercel: Settings -> Environment Variables
+
+  Pasta                   Quantas   Onde cadastrar no deploy
+  ----------------------  --------  -----------------------------------------
+  backend/.env            9         Azure -> cti-api-SEUNOME
+  analytics-python/.env   7         Azure -> cti-python-SEUNOME
+  frontend/.env           1         Vercel
+
+TODAS AS VARIÁVEIS (mesmo nome, valor de cada lugar):
+
+  Variável              Onde          No .env (computador)            Na Azure / Vercel
+  --------------------  ------------  ------------------------------  -----------------------------------------------
+  DB_URL                Java          jdbc:postgresql://HOST:5432/ctiinsights?sslmode=require   (o mesmo)
+  DB_HOST               Python        HOST do banco                   o mesmo
+  DB_PORT               Python        5432                            5432
+  DB_NAME               Python        ctiinsights                     o mesmo
+  DB_SSLMODE            Python        require                         require
+  DB_USER               Java+Python   usuário do banco                o mesmo
+  DB_PASSWORD           Java+Python   senha do banco                  a mesma
+  JWT_SECRET            Java          qualquer texto longo            SEGREDO_1
+  ETL_KEY               Java          o mesmo texto do ETL_API_KEY    SEGREDO_2
+  ETL_API_KEY           Python        o mesmo texto do ETL_KEY        SEGREDO_2
+  ETL_URL               Java          http://localhost:8000/etl       https://cti-python-SEUNOME.azurewebsites.net/etl
+  ADMIN_EMAIL           Java          seu admin de teste              SEU_EMAIL
+  ADMIN_PASSWORD        Java          senha do admin de teste         SENHA_FORTE
+  CORS_ORIGINS          Java          http://localhost:5173           https://cti-front-SEUNOME.vercel.app
+  VITE_API_URL          Site          http://localhost:8080/api       https://cti-api-SEUNOME.azurewebsites.net/api
+  SCM_DO_BUILD_DURING_DEPLOYMENT  Python (só na Azure)               true
+
+Só mudam os endereços (localhost -> internet) e os segredos.
+O nome tem que ser EXATAMENTE igual: maiúsculas e _ contam.
+
+
+=====================================================================
+ PASSO 1 · BANCO POSTGRESQL (portal.azure.com)
+=====================================================================
+--- 1.A CRIAR UM BANCO NOVO ---------------------------------------
+(Já tem o banco no Azure? Pule para o 1.B.
+ Usa Neon? Pule e use os dados do Neon nas variáveis; nesse caso,
+ crie o grupo rg-cti no passo 2.1.)
+
+[ ] 1. Pesquise "Servidores flexíveis do Banco de Dados do Azure para
+       PostgreSQL" -> Criar
+[ ] 2. Grupo de recursos: Criar novo -> rg-cti
+       Nome: cti-banco-SEUNOME · Região: Brazil South
+[ ] 3. Carga de trabalho: Desenvolvimento (B1ms) · Versão: 16
+[ ] 4. Usuário: ctiadmin · Senha: SENHA_BANCO
+[ ] 5. Rede -> Acesso público -> marque:
+       "Permitir acesso público de qualquer serviço do Azure"
+       "Adicionar endereço IP atual"
+[ ] 6. Revisar + criar -> CONFIRA O CUSTO -> Criar (uns 10 minutos)
+[ ] 7. No servidor: Bancos de dados -> Adicionar -> ctiinsights
+
+Host: cti-banco-SEUNOME.postgres.database.azure.com
+As tabelas o Java cria sozinho quando ligar.
+
+Erro de região ou de política? Use uma das regiões que a mensagem
+lista e a MESMA região em tudo.
+
+
+--- 1.B JÁ TEM O BANCO NO AZURE POSTGRESQL? -------------------------
+Use o mesmo banco que o projeto já usa no computador.
+
+[ ] 1. Pesquise o nome do seu servidor PostgreSQL -> abra
+[ ] 2. Visão geral -> Nome do servidor ........ anote como HOST
+       (termina em .postgres.database.azure.com)
+[ ] 3. Visão geral -> Logon do administrador .. anote como DB_USER
+[ ] 4. Esqueceu a senha? Visão geral -> Redefinir senha .. DB_PASSWORD
+[ ] 5. Bancos de dados -> veja o nome ......... DB_NAME
+       (não tem? Adicionar -> ctiinsights)
+[ ] 6. Rede -> marque "Permitir acesso público de qualquer serviço do
+       Azure" -> Salvar   (sem isso, os apps NÃO conectam)
+[ ] 7. Status "Parado"? -> Iniciar -> status "Pronto"
+
+  Java:   DB_URL = jdbc:postgresql://HOST:5432/DB_NAME?sslmode=require
+  Python: DB_HOST=HOST · DB_PORT=5432 · DB_NAME · DB_SSLMODE=require
+
+Não precisa criar as tabelas: o Java cria sozinho ao ligar
+(schema.sql), e as que já existem são mantidas.
+Para testar do seu computador, em Rede adicione também o seu IP atual.
+
+
+=====================================================================
+ PASSO 2 · PYTHON (Aplicativo Web)
+=====================================================================
+
+--- 2.1 Criar a instância (portal) ---------------------------------
+[ ] 1. Criar um recurso -> Aplicativo Web -> Criar
+[ ] 2. Grupo: rg-cti · Nome: cti-python-SEUNOME
+[ ] 3. Publicar: Código · Pilha de runtime: Python 3.12 · SO: Linux
+       Região: a mesma do banco
+[ ] 4. Plano do Linux: Criar novo -> plano-cti
+       Plano de preços: Gratuito F1
+[ ] 5. Revisar + criar -> Criar
+
+--- 2.2 Variáveis e comando de inicialização ----------------------
+No app -> Configurações -> Variáveis de ambiente -> + Adicionar
+(uma por uma) -> Aplicar -> Confirmar
+
+  DB_HOST ................................ cti-banco-SEUNOME.postgres.database.azure.com
+  DB_PORT ................................ 5432
+  DB_NAME ................................ ctiinsights
+  DB_USER ................................ ctiadmin
+  DB_PASSWORD ............................ SENHA_BANCO
+  DB_SSLMODE ............................. require
+  ETL_API_KEY ............................ SEGREDO_2
+  SCM_DO_BUILD_DURING_DEPLOYMENT ......... true   (faz a Azure rodar o pip install)
+
+No app -> Configurações -> Configuração -> Comando de inicialização:
+  python -m uvicorn api:app --host 0.0.0.0 --port 8000
+-> Salvar
+
+[ ] 8 variáveis cadastradas
+[ ] Comando de inicialização salvo
+
+--- 2.3 Ligar ao GitHub (Central de Implantação) ------------------
+[ ] 1. App cti-python-SEUNOME -> Central de Implantação
+       Origem: GitHub -> autorize
+[ ] 2. Organização · Repositório · Branch main -> Salvar
+[ ] 3. A Azure cria no seu GitHub o arquivo
+       .github/workflows/main_cti-python-SEUNOME.yml
+       O 1º deploy FALHA: é normal (ele procura o código na raiz)
+[ ] 4. No GitHub, abra esse arquivo -> lápis (Edit) -> troque 2 linhas
+       (mantenha os espaços do começo da linha):
+
+       ANTES:   run: pip install -r requirements.txt
+       DEPOIS:  run: pip install -r analytics-python/requirements.txt
+
+       ANTES:   run: zip release.zip ./* -r
+       DEPOIS:  run: cd analytics-python && zip ../release.zip ./* -r
+
+       -> Commit changes
+[ ] 5. Aba Actions do GitHub -> ✔ verde
+[ ] 6. Abrir https://cti-python-SEUNOME.azurewebsites.net/saude -> {"status":"ok"}
+
+Erro de permissão na Central de Implantação? Escolha "Autenticação
+básica" e ative em Configuração -> Configurações gerais ->
+"Credenciais de publicação de autenticação básica do SCM" = Ativado.
+
+
+=====================================================================
+ PASSO 3 · JAVA (Aplicativo Web)
+=====================================================================
+
+--- 3.1 Criar a instância (portal) ---------------------------------
+[ ] 1. Criar um recurso -> Aplicativo Web -> Criar
+[ ] 2. Grupo: rg-cti · Nome: cti-api-SEUNOME
+[ ] 3. Publicar: Código · Pilha de runtime: Java 21
+       Servidor Web Java: Java SE (Servidor Web Inserido / Embedded Web Server)
+       SO: Linux · Região: a mesma do Python
+[ ] 4. Plano do Linux: plano-cti (o que já existe)
+[ ] 5. Revisar + criar -> Criar
+
+--- 3.2 Variáveis -------------------------------------------------
+No app -> Configurações -> Variáveis de ambiente -> + Adicionar -> Aplicar
+
+  DB_URL ......... jdbc:postgresql://cti-banco-SEUNOME.postgres.database.azure.com:5432/ctiinsights?sslmode=require
+  DB_USER ........ ctiadmin
+  DB_PASSWORD .... SENHA_BANCO
+  JWT_SECRET ..... SEGREDO_1
+  ETL_KEY ........ SEGREDO_2  (igual ao ETL_API_KEY do Python)
+  ETL_URL ........ https://cti-python-SEUNOME.azurewebsites.net/etl
+  ADMIN_EMAIL .... SEU_EMAIL
+  ADMIN_PASSWORD . SENHA_FORTE
+  (CORS_ORIGINS fica para o passo 4)
+
+Não precisa de comando de inicialização: a Azure liga o .jar sozinha.
+
+[ ] 8 variáveis cadastradas
+
+--- 3.3 Ligar ao GitHub (Central de Implantação) ------------------
+[ ] 1. App cti-api-SEUNOME -> Central de Implantação -> Origem: GitHub
+       -> mesmo repositório, branch main -> Salvar
+[ ] 2. A Azure cria .github/workflows/main_cti-api-SEUNOME.yml
+       O 1º deploy FALHA: é normal (ele procura o pom.xml na raiz)
+[ ] 3. No GitHub, abra esse arquivo -> lápis (Edit) -> troque 2 linhas:
+
+       ANTES:   run: mvn clean install
+       DEPOIS:  run: mvn -f backend/pom.xml clean package -DskipTests
+
+       ANTES:   path: '${{ github.workspace }}/target/*.jar'
+       DEPOIS:  path: '${{ github.workspace }}/backend/target/*.jar'
+
+       Confira também: java-version: '21'
+       -> Commit changes
+[ ] 4. Aba Actions -> ✔ verde
+[ ] 5. Abrir https://cti-api-SEUNOME.azurewebsites.net/api/health -> {"status":"ok"}
+       (o primeiro start pode levar 2 a 3 minutos)
+
+Depois disso, todo git push publica de novo o Python e o Java sozinho.
+
+
+=====================================================================
+ PASSO 4 · VERCEL + CORS
+=====================================================================
+vercel.com -> Add New -> Project -> Import o repositório
+
+  Project Name ......... cti-front-SEUNOME
+  Framework Preset ..... Vite
+  Root Directory ....... frontend
+  Build / Output ....... npm run build · dist (já vem preenchido)
+  Environment Variable . VITE_API_URL = https://cti-api-SEUNOME.azurewebsites.net/api
+
+[ ] Deploy -> "Congratulations"
+[ ] Anotar https://cti-front-SEUNOME.vercel.app
+
+AVISAR O JAVA (CORS) - último passo:
+Portal -> cti-api-SEUNOME -> Configurações -> Variáveis de ambiente
+-> + Adicionar -> CORS_ORIGINS = https://cti-front-SEUNOME.vercel.app
+(SEM / no fim) -> Aplicar -> Confirmar. O Java reinicia sozinho.
+
+[ ] CORS_ORIGINS salvo
+
+
+=====================================================================
+ PASSO 5 · TESTAR (nesta ordem)
+=====================================================================
+[ ] 1. cti-python-...azurewebsites.net/saude ...... {"status":"ok"}
+[ ] 2. cti-api-...azurewebsites.net/api/health .... {"status":"ok"}
+[ ] 3. cti-front-....vercel.app ................... tela inicial do site
+[ ] 4. Login com ADMIN_EMAIL e ADMIN_PASSWORD ..... entra, sem erro de CORS
+[ ] 5. Enviar sample-data/dados.xlsx .............. "Enviado! ... linhas válidas"
+[ ] 6. Gráficos (/dashboard) e depois F5 .......... 32 clientes, 5 gráficos, continua na tela
+
+Teste automático (do seu computador):
+  python testes/testar_tudo.py --back https://cti-api-SEUNOME.azurewebsites.net --python https://cti-python-SEUNOME.azurewebsites.net
+[ ] Resultado com 0 FALHA
+
+O plano grátis F1 tem limite de CPU por dia: se parar de responder
+depois de muito teste, volta no dia seguinte.
+
+ENTREGA: link do site, link do /api/health, link do GitHub e um print
+do dashboard.
+
+Para não gastar créditos: pare o servidor do banco no portal (Parar)
+quando não estiver usando.
+
+
+=====================================================================
+ PASSO 6 · ERROS COMUNS
+=====================================================================
+Actions ✘: requirements.txt not found
+  -> faltou trocar as 2 linhas do .yml do Python (passo 2.3)
+Actions ✘: no POM in this directory
+  -> faltou trocar as 2 linhas do .yml do Java (passo 3.3)
+Erro de região ou de política ao criar
+  -> use uma das regiões que a mensagem lista, a mesma em tudo
+Python mostra a página padrão da Azure
+  -> falta o Comando de inicialização (passo 2.2)
+Log: Connection timed out no banco
+  -> Rede do PostgreSQL: "Permitir acesso de serviços do Azure"
+Log: password authentication failed
+  -> DB_USER ou DB_PASSWORD errado nas variáveis
+Log: Could not resolve placeholder
+  -> faltou uma variável no Java (o nome aparece no erro)
+blocked by CORS policy (F12)
+  -> CORS_ORIGINS = endereço exato da Vercel, sem / no fim
+404 ao apertar F5 no /dashboard
+  -> falta o frontend/vercel.json no GitHub
+Upload com erro 502 ou 503
+  -> ETL_KEY diferente de ETL_API_KEY, ou ETL_URL errado: abra /saude
+
+Onde olhar:
+  GitHub -> aba Actions (clique na execução com ✘ e leia o passo vermelho)
+  Azure  -> o app -> Monitoramento -> Fluxo de log
+  Vercel -> Deployments -> Build Logs
+  Site   -> F12 -> Console
+
+SEGURANÇA: os valores reais ficam SÓ no bloco de notas e nas
+variáveis de ambiente da Azure. Nunca no código, no GitHub, em prints
+ou em slides.

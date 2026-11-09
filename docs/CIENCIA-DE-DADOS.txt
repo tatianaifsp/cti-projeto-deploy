@@ -1,0 +1,882 @@
+==========================================================================================
+CIÊNCIA DE DADOS (Python + pandas + FastAPI): LIMPAR, CALCULAR E GRAVAR NO BANCO
+==========================================================================================
+
+O Python recebe as linhas JÁ VALIDADAS pelo backend e faz o ETL (Extrair, Transformar, Carregar):
+  E (extrair)    api.py      recebe o POST /etl com o JSON das linhas válidas.
+  T (transformar) limpeza.py padroniza: "ana souza" -> "Ana Souza", "IND." -> "Indústria", texto -> número e data.
+                  analise.py calcula: média, mediana, desvio padrão, quartis, totais por segmento, nível, consultor e serviço.
+                  insights.py escreve frases em português a partir dos números.
+  L (carregar)   banco.py    cria o lote e grava nas tabelas: upload_lote, cliente, segmento, consultor, servico,
+                             contrato e estatistica_lote (o JSON das contas, que o dashboard vai ler depois).
+O Python NÃO valida campo a campo de novo (isso já foi feito no front e no backend) e NÃO devolve dados: responde só {"ok": true}.
+Se algo falhar, o lote fica com status ERRO no banco e o backend recebe o erro 500.
+
+ETAPA 1 - Instalar
+  cd analytics-python
+  python -m venv .venv
+  .venv\Scripts\activate           (Mac/Linux: source .venv/bin/activate)
+  pip install -r requirements.txt
+
+ETAPA 2 - Configurar (arquivo analytics-python/.env)
+  copy .env.example .env
+  DB_HOST, DB_PORT=5432, DB_NAME=ctiinsights, DB_USER, DB_PASSWORD, DB_SSLMODE=require
+  ETL_API_KEY=  (vazio = sem chave. Se preencher, use a MESMA chave em ETL_KEY no backend/.env)
+
+BANCO NEON (em vez do Azure)
+  O link do Neon tem este formato:
+     postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require&channel_binding=require
+  Copie para o analytics-python/.env assim:
+     DB_HOST=HOST          (ex.: ep-nome-123456.sa-east-1.aws.neon.tech)
+     DB_PORT=5432
+     DB_NAME=BANCO         (ex.: neondb)
+     DB_USER=USUARIO
+     DB_PASSWORD=SENHA
+     DB_SSLMODE=require
+  O código Python não muda: serve para Neon e para Azure.
+
+ETAPA 3 - Testar a conexão com o banco (opcional, recomendado)
+  python testar_conexao.py        -> deve mostrar a versão do PostgreSQL
+
+ETAPA 4 - Testar a limpeza e as contas SEM banco
+  python -m uvicorn api:app --port 8000
+  Abra http://localhost:8000/saude   -> {"status":"ok"}
+  Abra http://localhost:8000/docs    -> tela para testar. POST /testar com o conteúdo de amostras/clientes.json
+  Esperado: média 1135000 e mediana 1135000 (2 clientes: 1.850.000 e 420.000).
+
+ETAPA 5 - Ligar de verdade
+  uvicorn api:app --port 8000     (deixe o terminal aberto)
+  O backend chama POST http://localhost:8000/etl a cada upload.
+
+ETAPA 6 - Conferir no banco (DBeaver)
+  Com a planilha sample-data/dados.xlsx (38 linhas, 32 válidas, 6 com erro):
+    SELECT status, total_linhas, linhas_validas, linhas_invalidas FROM upload_lote;   -> PROCESSADO, 38, 32, 6
+    SELECT COUNT(*) FROM cliente;   -> 32      SELECT COUNT(*) FROM consultor;  -> 4
+    SELECT COUNT(*) FROM segmento;  -> 6       SELECT COUNT(*) FROM servico;    -> 6
+    SELECT COUNT(*) FROM contrato;  -> 61
+    SELECT resultado::json -> 'resumo' ->> 'media' FROM estatistica_lote;   -> 2261250
+  Números esperados do resumo: média 2.261.250 | mediana 1.470.000 | desvio padrão 1.909.013,85
+
+ETAPA 7 - Deploy do Python (Azure App Service, Render, Railway...)
+  Pasta do serviço: analytics-python      Instalar:  pip install -r requirements.txt
+  Comando de início:  uvicorn api:app --host 0.0.0.0 --port $PORT      (no Azure App Service: python -m uvicorn api:app --host 0.0.0.0 --port 8000)
+  Variáveis de ambiente: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_SSLMODE=require, ETL_API_KEY.
+  O comando precisa rodar DENTRO da pasta analytics-python (api.py usa "import config").
+  Libere o IP do serviço no firewall do PostgreSQL do Azure.
+  Depois coloque no backend: ETL_URL=https://SEU-PYTHON/etl  e  ETL_KEY igual ao ETL_API_KEY.
+
+ETAPA 8 - Conferir antes do deploy
+  [ ] python testes/testar_tudo.py  (parte 1 e 2 em OK)
+  [ ] /saude responde ok
+  [ ] um upload de teste grava 32 clientes no banco (ETAPA 6)
+
+##########################################################################################
+CÓDIGO COMPLETO (cada linha tem comentário na frente)
+##########################################################################################
+
+ARQUIVO: analytics-python/requirements.txt
+Pacotes
+------------------------------------------------------------------------------------------
+pandas>=2.2
+numpy>=1.26
+scipy>=1.13
+SQLAlchemy>=2.0
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+fastapi>=0.115     # cria a API (api.py)
+uvicorn>=0.30      # servidor que mantém a API ligada
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/.env.example
+Configuração
+------------------------------------------------------------------------------------------
+# Copie este arquivo para ".env" (cp .env.example .env) e preencha com os dados do SEU servidor Azure.
+# O arquivo .env nunca vai para o Git (tem senha!).
+# NEON: no link do Neon  postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require  copie assim:
+#   DB_HOST=HOST (ep-nome-123456.sa-east-1.aws.neon.tech)  DB_NAME=BANCO (neondb)  DB_USER=USUARIO  DB_PASSWORD=SENHA  DB_SSLMODE=require
+DB_HOST=SEU-SERVIDOR.postgres.database.azure.com
+DB_PORT=5432
+DB_NAME=ctiinsights
+DB_USER=ctiadmin
+DB_PASSWORD=sua-senha
+DB_SSLMODE=require
+
+# Chave combinada com o backend (ETL_KEY no backend/.env). Vazio = sem chave (só para estudar no seu computador).
+ETL_API_KEY=
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/config.py
+Lê o .env
+------------------------------------------------------------------------------------------
+"""Configuração de conexão com o banco. Lê as variáveis do arquivo .env (pasta analytics-python)."""
+import os                                                      # import: os = lê variáveis de ambiente
+from pathlib import Path                                       # import: Path = trabalha com caminhos de arquivos
+
+from dotenv import load_dotenv                                 # import: load_dotenv lê o arquivo .env
+from sqlalchemy.engine import URL                              # import: URL monta o endereço do banco
+
+load_dotenv(Path(__file__).resolve().parent / ".env")   # lê o arquivo .env que está na pasta analytics-python
+
+
+def database_url() -> URL:                                     # função: devolve o endereço de conexão com o banco
+    """Monta o endereço do banco com as variáveis DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD e DB_SSLMODE.
+
+    No Azure Database for PostgreSQL use DB_SSLMODE=require.
+    """
+    return URL.create(                                         # monta o endereço do PostgreSQL
+        "postgresql+psycopg",                                  # driver: psycopg (conversa com o PostgreSQL)
+        username=os.getenv("DB_USER", "cti"),                  # usuário (do .env)
+        password=os.getenv("DB_PASSWORD", "cti123"),           # senha (do .env)
+        host=os.getenv("DB_HOST", "localhost"),                # servidor (no Azure termina com .postgres.database.azure.com)
+        port=int(os.getenv("DB_PORT", "5432")),                # porta padrão do PostgreSQL
+        database=os.getenv("DB_NAME", "ctiinsights"),          # nome do banco
+        query={"sslmode": os.getenv("DB_SSLMODE", "prefer")},  # sslmode=require: conexão criptografada (o Azure exige)
+    )                                                          # fecha o bloco
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/api.py
+A API: recebe o POST /etl
+------------------------------------------------------------------------------------------
+# ============================================================================
+# api.py — a "porta de entrada" do Python para o DEPLOY: transforma o ETL em uma API (FastAPI).
+# O Spring chama POST /etl enviando as linhas válidas; o Python CRIA o lote, limpa, calcula e GRAVA tudo no Azure..
+# Como ligar:  uvicorn api:app --port 8000        (documentação automática em http://localhost:8000/docs)
+# ============================================================================
+import logging                                                                      # logging: escreve mensagens no terminal
+import os                                                                           # os: lê variáveis de ambiente (ETL_API_KEY)
+from typing import Any                                                              # Any: "qualquer tipo" (valores das linhas)
+
+from fastapi import FastAPI, Header, HTTPException                                  # FastAPI: cria a API; Header: lê cabeçalhos; HTTPException: devolve erro HTTP
+import pandas as pd                                                                 # pandas: tabelas de dados
+from pydantic import BaseModel                                                      # BaseModel: descreve o formato do JSON que o Spring envia
+
+import config                                                                       # config.py: carrega o .env (senha do banco, ETL_API_KEY)
+from analise import calcular                                                        # calcular: indicadores e frases (analise.py)
+from limpeza import tratar                                                          # tratar: limpeza (limpeza.py)
+from main import processar_lote                                                     # a MESMA função que o modo de estudo usa: trata, calcula e grava no Azure
+
+log = logging.getLogger("analytics")                                                # logger desta API
+app = FastAPI(title="CTI Insights — ETL em Python")                                 # app: a aplicação web
+_engine = None                                                                      # conexão com o Azure (criada na primeira vez que for usada)
+
+
+class Pedido(BaseModel):                                                            # Pedido: o formato do JSON enviado pelo Spring
+    arquivoNome: str = "planilha"                                                   # nome do arquivo enviado
+    recebidas: int                                                                  # total de linhas da planilha (boas + ruins), para o relatório de qualidade
+    invalidas: int = 0                                                              # quantas linhas tinham erro (o Spring não as enviou)
+    comAviso: int = 0                                                               # quantas linhas válidas têm aviso
+    linhas: list[dict[str, Any]]                                                    # só as linhas válidas
+
+
+def _engine_azure():                                                                # devolve a conexão com o Azure (cria só uma vez)
+    global _engine                                                                  # usa a variável de fora da função
+    if _engine is None:                                                             # ainda não existe?
+        import banco                                                                # banco.py: único arquivo que fala com o Azure
+        _engine = banco.criar_engine()                                              # abre a conexão
+    return _engine                                                                  # devolve
+
+
+@app.get("/saude")                                                                  # GET /saude: o Spring (ou você) confere se a API está de pé
+def saude() -> dict:                                                                # função chamada nesse endereço
+    return {"status": "ok"}                                                         # resposta simples
+
+
+@app.post("/etl")                                                                   # POST /etl: recebe o lote, processa e grava no Azure
+def etl(pedido: Pedido, x_etl_key: str | None = Header(default=None)) -> dict:      # x_etl_key: cabeçalho X-ETL-Key
+    chave = os.getenv("ETL_API_KEY", "").strip()                                    # chave combinada com o Spring (vazia = sem chave, só para estudo)
+    if chave and x_etl_key != chave:                                                # há chave configurada e a enviada não confere?
+        raise HTTPException(status_code=401, detail="Chave do ETL inválida.")       # recusa: 401 não autorizado
+    if not pedido.linhas:                                                           # veio vazio?
+        raise HTTPException(status_code=422, detail="Nenhuma linha válida foi enviada.")  # 422: dados inválidos
+    try:                                                                            # tenta processar
+        processar_lote(_engine_azure(), pedido.arquivoNome, pedido.linhas,          # cria o lote, trata, calcula e grava no Azure
+                                 pedido.recebidas, pedido.invalidas, pedido.comAviso)  # (continuação) contagens
+    except Exception as e:  # noqa: BLE001 - o motivo vai para a resposta
+        raise HTTPException(status_code=500, detail=f"Falha no ETL: {e}")           # 500: erro no servidor (o lote fica com status ERRO)
+    return {"ok": True}                                                             # 200: deu certo; o Python não devolve dados, só gravou no banco
+
+
+@app.post("/testar")                                                                # POST /testar: teste sem banco (não grava nada no Azure)
+def testar(linhas: list[dict[str, Any]]) -> dict:                                   # recebe só a lista de clientes (como amostras/clientes.json)
+    res = tratar(pd.DataFrame(linhas).astype(object))                               # limpa
+    return calcular(res, len(linhas))                                               # calcula e devolve os números e as frases
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/main.py
+Coordena o ETL
+------------------------------------------------------------------------------------------
+"""Entrada do trabalho do Python: processar_lote (chamado pela API em api.py).
+
+O Spring só valida e envia as linhas válidas; o PYTHON cria o lote, limpa (limpeza.py), calculadas (analise.py)
+e gravadas no Azure (banco.py).
+"""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import logging                                                                      # logging: escreve mensagens no terminal
+
+import pandas as pd                                                                 # pandas: tabelas de dados
+
+from analise import calcular                                                        # calcular: gera os indicadores e as frases (analise.py)
+from limpeza import tratar                                                          # tratar: limpa e padroniza os dados (limpeza.py)
+
+log = logging.getLogger("analytics")                                                # logger do programa
+
+
+def processar_lote(engine, arquivo_nome: str, linhas: list[dict],  # processar_lote: cria o lote, trata, calcula e GRAVA tudo no Azure
+                   recebidas: int, invalidas: int, com_aviso: int) -> int:          # (continuação) contagens que o backend informou
+    import banco                                                                    # banco.py: funções que gravam no banco Azure
+    if not linhas:                                                                  # o backend não mandou nenhuma linha?
+        raise ValueError("o backend não enviou linhas válidas")                     # erro explicando
+    lote_id = banco.criar_lote(engine, arquivo_nome, recebidas, invalidas, len(linhas), com_aviso)  # CRIA o lote no banco (status PROCESSANDO)
+    try:                                                                            # tenta processar
+        bruto = pd.DataFrame(linhas).astype(object)                                 # lista de dicionários vira tabela do pandas
+        res = tratar(bruto)                                                         # limpa os dados
+        payload = calcular(res, recebidas)                                          # calcula média, mediana, agrupamentos e frases
+        banco.gravar_resultado(engine, lote_id, res.tratado, payload, len(res.rejeitadas))  # GRAVA clientes, contratos e o JSON no Azure
+        log.info("Lote %s processado.", lote_id)                                    # registra no terminal
+        return lote_id                                                              # deu certo: devolve o id do lote
+    except Exception as e:  # noqa: BLE001 - qualquer falha deve aparecer na tela do usuário
+        log.exception("Falha no lote %s", lote_id)                                  # escreve o erro completo no terminal
+        banco.marcar_erro(engine, lote_id, f"Falha no ETL: {e}")                    # grava ERRO no lote para a tela mostrar
+        raise                                                                       # repassa o erro para a API responder 500
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/limpeza.py
+T: limpa e padroniza
+------------------------------------------------------------------------------------------
+"""Transformação: limpeza, padronização e conversão de tipos (etapas 2 a 5 da aba ciencia_de_dados)."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import math                                                                         # math: funções matemáticas (isfinite)
+import re                                                                           # re: expressões regulares (padrões de texto)
+import unicodedata                                                                  # unicodedata: remove acentos
+from dataclasses import dataclass, field                                            # dataclass: cria classes só de dados com pouco código
+from datetime import date, datetime                                                 # date e datetime: datas
+
+import pandas as pd                                                                 # pandas: tabelas de dados (DataFrame)
+
+COLUNAS = [                                                                         # as 10 colunas da planilha
+    "codigo_cliente", "nome_cliente", "consultor", "segmento", "nivel_cliente",     # (continuação)
+    "faturamento_anual", "servicos_contratados", "data_contratacao", "cidade", "uf",  # (continuação)
+]                                                                                   # fecha o bloco
+OBRIGATORIAS = COLUNAS[:8]                                                          # as 8 primeiras são obrigatórias
+
+# Chave = texto sem acento, minúsculo e sem pontuação (veja _simples). Valor = nome padronizado.
+SEGMENTOS = {                                                                       # dicionário: texto simplificado -> nome oficial do segmento
+    "ind": "Indústria", "industria": "Indústria", "industrial": "Indústria",        # Indústria (várias formas de escrever)
+    "com": "Comércio", "comercio": "Comércio",                                      # Comércio
+    "serv": "Serviços", "servico": "Serviços", "servicos": "Serviços",              # Serviços
+    "saude": "Saúde",                                                               # Saúde
+    "edu": "Educação", "educacao": "Educação",                                      # Educação
+    "tec": "Tecnologia", "ti": "Tecnologia", "tecnologia": "Tecnologia",            # Tecnologia
+}                                                                                   # fecha o bloco
+SERVICOS = {                                                                        # dicionário: nome simplificado -> nome oficial do serviço
+    "internet dedicada": "Internet Dedicada",                                       # Internet Dedicada
+    "link empresarial": "Link Empresarial",                                         # Link Empresarial
+    "firewall": "Firewall",                                                         # Firewall
+    "backup": "Backup",                                                             # Backup
+    "mpls": "MPLS",                                                                 # MPLS
+    "cloud": "Cloud",                                                               # Cloud
+}                                                                                   # fecha o bloco
+NIVEIS = {"A", "B", "C"}                                                            # níveis aceitos
+PARTICULAS = {"de", "da", "do", "das", "dos", "e"}                                  # palavras que ficam em minúsculo no nome
+
+
+def _simples(texto: str) -> str:                                                    # _simples: tira acento, deixa minúsculo e sem pontuação
+    sem_acento = "".join(c for c in unicodedata.normalize("NFKD", str(texto)) if not unicodedata.combining(c))  # separa cada letra do seu acento e descarta o acento
+    return re.sub(r"[^a-z0-9]+", " ", sem_acento.lower()).strip()                   # troca símbolos por espaço e tira as pontas
+
+
+def _vazio(v) -> bool:                                                              # _vazio: true se o valor é nulo ou NaN
+    if v is None:                                                                   # None é vazio
+        return True                                                                 # então devolve true
+    try:                                                                            # tenta perguntar ao pandas
+        return bool(pd.isna(v))                                                     # isna detecta NaN e None
+    except (TypeError, ValueError):                                                 # se não souber, não é vazio
+        return False                                                                # devolve false
+
+
+def limpar_texto(v) -> str | None:                                                  # limpar_texto: apaga espaços sobrando
+    """Remove espaços das pontas e duplicados; vazio vira None."""
+    if _vazio(v):                                                                   # vazio
+        return None                                                                 # devolve None
+    t = re.sub(r"\s+", " ", str(v)).strip()                                         # troca vários espaços por um e corta as pontas
+    return t or None                                                                # texto vazio vira None
+
+
+def _aplicar(serie: pd.Series, funcao) -> pd.Series:                                # _aplicar: aplica uma função a cada item da coluna
+    """Como Series.map, mas sempre devolve dtype object e mantém None (o pandas 3 trocaria por NaN)."""
+    return pd.Series([funcao(v) for v in serie], index=serie.index, dtype=object)   # cria a nova coluna mantendo None
+
+
+def titulo(texto: str | None) -> str | None:                                        # titulo: "ANA SOUZA" vira "Ana Souza"
+    """'ANA SOUZA' -> 'Ana Souza'; mantém 'de', 'da', 'do'... em minúsculo."""
+    if texto is None:                                                               # sem texto
+        return None                                                                 # devolve None
+    palavras = texto.lower().split(" ")                                             # quebra em palavras minúsculas
+    return " ".join(p if (i > 0 and p in PARTICULAS) else p.capitalize() for i, p in enumerate(palavras))  # 'da', 'de'... ficam minúsculas; as outras com inicial maiúscula
+
+
+def padronizar_segmento(texto: str | None) -> tuple[str | None, bool]:              # padronizar_segmento: devolve (nome oficial, foi reconhecido?)
+    """Devolve (segmento padronizado, reconhecido?). Desconhecido vira Título e fica sinalizado."""
+    if texto is None:                                                               # sem texto
+        return None, False                                                          # devolve (None, falso)
+    chave = _simples(texto)                                                         # chave simplificada
+    if chave in SEGMENTOS:                                                          # está no dicionário?
+        return SEGMENTOS[chave], True                                               # sim: nome oficial e reconhecido
+    return titulo(texto), False                                                     # não: devolve em formato Título, marcado como desconhecido
+
+
+def padronizar_servicos(texto: str | None) -> list[str]:                            # padronizar_servicos: texto "A; B" vira lista de nomes oficiais
+    if texto is None:                                                               # sem texto
+        return []                                                                   # lista vazia
+    vistos: list[str] = []                                                          # lista de serviços já vistos (sem repetir)
+    for parte in texto.split(";"):                                                  # para cada pedaço separado por ;
+        parte = limpar_texto(parte)                                                 # limpa o pedaço
+        if not parte:                                                               # vazio: pula
+            continue                                                                # continue = vai para o próximo pedaço
+        nome = SERVICOS.get(_simples(parte)) or titulo(parte)                       # nome oficial, ou formato Título se não estiver no dicionário
+        if nome not in vistos:                                                      # se ainda não está na lista
+            vistos.append(nome)                                                     # acrescenta
+    return vistos                                                                   # devolve a lista
+
+
+def parse_numero(v) -> float | None:                                                # parse_numero: texto vira número (aceita R$ e vírgula)
+    """Aceita 1850000, '1850000.50', '1.850.000,50' e 'R$ 1.850.000,50'. Inválido -> None."""
+    if _vazio(v):                                                                   # vazio
+        return None                                                                 # devolve None
+    if isinstance(v, (int, float)):                                                 # já é número?
+        return float(v) if math.isfinite(float(v)) else None                        # devolve como float (se for finito)
+    t = re.sub(r"\s", "", str(v).replace("R$", "").replace(" ", ""))                # tira "R$" e espaços
+    if not re.fullmatch(r"-?[0-9.,]+", t or ""):                                    # se sobrou letra, não é número
+        return None                                                                 # devolve None
+    if "." in t and "," in t:                                                       # tem ponto e vírgula juntos?
+        t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")  # o último símbolo é o decimal
+    elif "," in t:                                                                  # só vírgula
+        t = t.replace(",", "") if t.count(",") > 1 else t.replace(",", ".")         # várias vírgulas = milhar; uma = decimal
+    elif "." in t and re.fullmatch(r"-?\d{1,3}(\.\d{3})+", t):                      # só ponto no formato de milhar (1.850.000)
+        t = t.replace(".", "")                                                      # tira os pontos
+    try:                                                                            # tenta converter
+        return float(t)                                                             # devolve o número
+    except ValueError:                                                              # não deu
+        return None                                                                 # devolve None
+
+
+def parse_data(v) -> date | None:                                                   # parse_data: texto vira data (aaaa-mm-dd ou dd/mm/aaaa)
+    if _vazio(v):                                                                   # vazio
+        return None                                                                 # devolve None
+    if isinstance(v, (datetime, pd.Timestamp)):                                     # já é data do pandas/Excel?
+        return v.date()                                                             # devolve só a data
+    if isinstance(v, date):                                                         # já é date?
+        return v                                                                    # devolve igual
+    t = str(v).strip()                                                              # trata como texto
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$", t)                        # procura o formato aaaa-mm-dd
+    try:                                                                            # tenta converter
+        if m:                                                                       # achou o formato ISO
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))          # monta a data
+        return datetime.strptime(t, "%d/%m/%Y").date()                              # senão tenta dd/mm/aaaa
+    except ValueError:                                                              # data inexistente
+        return None                                                                 # devolve None
+
+
+@dataclass                                                                          # dataclass: classe só para carregar o resultado
+class ResultadoTransformacao:                                                       # resultado do tratamento
+    tratado: pd.DataFrame                                                           # clientes tratados (tabela)
+    rejeitadas: pd.DataFrame                                                        # linhas recusadas (tabela)
+    padronizacoes: dict[str, int] = field(default_factory=dict)                     # quantas padronizações foram feitas
+    segmentos_originais: list[dict] = field(default_factory=list)                   # segmentos que foram corrigidos
+    avisos: list[str] = field(default_factory=list)                                 # avisos de qualidade
+
+
+def tratar(bruto: pd.DataFrame) -> ResultadoTransformacao:                          # tratar: função principal da limpeza
+    """Recebe as linhas como texto e devolve o DataFrame tratado + as linhas que o ETL recusou."""
+    df = bruto.copy().reset_index(drop=True)                                        # cópia da tabela com índice 0,1,2...
+    df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", str(c)).lower() for c in df.columns]  # codigoCliente (JSON da aula 10) vira codigo_cliente
+    for c in COLUNAS:                                                               # para cada coluna esperada
+        if c not in df.columns:                                                     # se não veio na tabela
+            df[c] = None                                                            # cria vazia
+    if "linha" not in df.columns:                                                   # se não há número da linha
+        df["linha"] = df.index + 2  # cabeçalho é a linha 1 da planilha
+    df = df[["linha"] + COLUNAS].astype(object)                                     # deixa só as colunas que usamos
+
+    # ---- limpeza (str.strip) ----
+    brutos = {c: df[c].copy() for c in COLUNAS}                                     # guarda os valores originais (para contar mudanças)
+    for c in COLUNAS:                                                               # para cada coluna
+        if c not in ("faturamento_anual", "data_contratacao"):                      # menos faturamento e data (tratados depois)
+            df[c] = _aplicar(df[c], limpar_texto)                                   # limpa os espaços
+
+    # ---- padronização ----
+    df["segmento_original"] = df["segmento"]                                        # guarda o segmento original
+    padrao = [padronizar_segmento(v) for v in df["segmento"]]                       # padroniza cada segmento
+    df["segmento"] = pd.Series([p[0] for p in padrao], index=df.index, dtype=object)  # coluna segmento com o nome oficial
+    desconhecidos_idx = {i for i, (v, (_, ok)) in zip(df.index, zip(df["segmento_original"], padrao)) if v is not None and not ok}  # linhas cujo segmento não foi reconhecido
+
+    df["codigo_cliente"] = _aplicar(df["codigo_cliente"], lambda x: x.upper() if x else x)  # código em maiúsculas
+    df["consultor"] = _aplicar(df["consultor"], titulo)                             # consultor em formato Título
+    df["nivel_cliente"] = _aplicar(df["nivel_cliente"], lambda x: x.upper() if x else x)  # nível em maiúsculas
+    df["uf"] = _aplicar(df["uf"], lambda x: x.upper() if x and len(x) == 2 and x.isalpha() else None)  # UF em maiúsculas (ou None se inválida)
+    df["servicos"] = _aplicar(df["servicos_contratados"], padronizar_servicos)      # serviços viram lista
+
+    # ---- conversão de tipos ----
+    df["faturamento_anual"] = _aplicar(df["faturamento_anual"], parse_numero)       # faturamento vira número
+    df["data_contratacao"] = _aplicar(df["data_contratacao"], parse_data)           # data vira data
+
+    # ---- validação defensiva (o backend já validou; aqui é uma proteção extra) ----
+    motivos: list[list[str]] = [[] for _ in range(len(df))]                         # lista de motivos de recusa de cada linha
+    for i, row in df.iterrows():                                                    # para cada linha
+        for c in OBRIGATORIAS:                                                      # para cada coluna obrigatória
+            vazio = (not row["servicos"]) if c == "servicos_contratados" else _vazio(row[c])  # serviços: lista vazia conta como vazio
+            if vazio:                                                               # se está vazio
+                motivos[i].append(f"{c}: vazio ou inválido")                        # anota o motivo
+        if i in desconhecidos_idx:                                                  # segmento desconhecido?
+            motivos[i].append(f"segmento: '{row['segmento_original']}' não reconhecido")  # anota o motivo
+        if not _vazio(row["nivel_cliente"]) and row["nivel_cliente"] not in NIVEIS:  # nível fora de A, B, C?
+            motivos[i].append(f"nivel_cliente: '{row['nivel_cliente']}' fora de A/B/C")  # anota o motivo
+        if not _vazio(row["faturamento_anual"]) and row["faturamento_anual"] < 0:   # faturamento negativo?
+            motivos[i].append("faturamento_anual: negativo")                        # anota o motivo
+    duplicado = df["codigo_cliente"].notna() & df["codigo_cliente"].duplicated(keep="first")  # código repetido (mantém o primeiro)
+    for i in df.index[duplicado]:                                                   # para cada repetido
+        motivos[i].append("codigo_cliente: duplicado")                              # anota o motivo
+
+    recusada = pd.Series([bool(m) for m in motivos], index=df.index)                # linhas recusadas = as que têm algum motivo
+    rejeitadas = df.loc[recusada, ["linha", "codigo_cliente", "nome_cliente"]].copy()  # tabela das recusadas
+    rejeitadas["motivo"] = [" | ".join(motivos[i]) for i in df.index[recusada]]     # coluna com os motivos
+
+    # ---- quantos valores mudaram na padronização (para o relatório de qualidade) ----
+    def mudou(coluna: str, original: pd.Series) -> int:                             # mudou: conta quantos valores foram alterados
+        pares = zip(original, df[coluna])                                           # compara o original com o tratado
+        return sum(1 for a, b in pares if not _vazio(a) and str(a) != ("" if _vazio(b) else str(b)))  # soma as diferenças
+
+    padronizacoes = {                                                               # relatório de qualidade
+        "segmento": mudou("segmento", brutos["segmento"]),                          # segmentos corrigidos
+        "consultor": mudou("consultor", brutos["consultor"]),                       # consultores corrigidos
+        "nivel_cliente": mudou("nivel_cliente", brutos["nivel_cliente"]),           # níveis corrigidos
+    }                                                                               # fim do relatório
+    contagem = (                                                                    # conta ocorrências de cada segmento original
+        df[~recusada][["segmento_original", "segmento"]].dropna().value_counts().reset_index(name="ocorrencias")  # (continuação)
+    )                                                                               # (continuação)
+    segmentos_originais = [                                                         # lista dos segmentos corrigidos
+        {"original": str(r.segmento_original), "padronizado": str(r.segmento), "ocorrencias": int(r.ocorrencias)}  # original, padronizado e quantas vezes
+        for r in contagem.sort_values(["segmento", "ocorrencias"], ascending=[True, False]).itertuples()  # ordenado por segmento
+    ]                                                                               # fim da lista
+
+    avisos: list[str] = []                                                          # lista de avisos (vazia por enquanto)
+
+    tratado = df[~recusada].copy()                                                  # tratado = só as linhas boas
+    tratado["faturamento_anual"] = tratado["faturamento_anual"].astype(float)       # faturamento como número decimal
+    tratado["qtd_servicos"] = tratado["servicos"].map(len)                          # quantidade de serviços por cliente
+    tratado["data_contratacao"] = pd.to_datetime(tratado["data_contratacao"].astype("datetime64[ns]"))  # data como data/hora do pandas
+    tratado["mes"] = tratado["data_contratacao"].dt.strftime("%Y-%m")               # mês no formato aaaa-mm
+    tratado = tratado.reset_index(drop=True)[[                                      # organiza as colunas na ordem final
+        "linha", "codigo_cliente", "nome_cliente", "consultor", "segmento", "segmento_original", "nivel_cliente",  # (continuação)
+        "faturamento_anual", "servicos", "qtd_servicos", "data_contratacao", "mes", "cidade", "uf",  # (continuação)
+    ]]                                                                              # fecha o bloco
+    return ResultadoTransformacao(tratado, rejeitadas.reset_index(drop=True), padronizacoes, segmentos_originais, avisos)  # devolve o resultado completo
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/analise.py
+T: calcula média, mediana, desvio...
+------------------------------------------------------------------------------------------
+"""Análise: calcula as estatísticas do dashboard: média, mediana, moda, desvio padrão, quartis e correlação.
+
+Devolve o objeto `Estatisticas` do contrato (docs/CONTRATO.md): camelCase, 100% serializável em JSON
+(NaN e infinito viram null)."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import math                                                                         # math: funções matemáticas
+from datetime import datetime, timezone                                             # datetime e timezone: data e hora em UTC
+
+import pandas as pd                                                                 # pandas: tabelas de dados
+from scipy import stats as sp                                                       # scipy.stats: testes estatísticos (correlação)
+
+from insights import gerar_insights                                                 # gerar_insights: monta as frases (insights.py)
+from limpeza import ResultadoTransformacao                                          # o resultado da limpeza (limpeza.py)
+
+
+# ------------------------------------------------------------------ utilitários
+def num(x, casas: int | None = 2):                                                  # num: converte para número seguro para JSON
+    """Número Python seguro para JSON (NaN/inf viram None)."""
+    if x is None:                                                                   # sem valor
+        return None                                                                 # devolve None
+    try:                                                                            # tenta converter
+        f = float(x)                                                                # vira float
+    except (TypeError, ValueError):                                                 # se não der
+        return None                                                                 # devolve None
+    if not math.isfinite(f):                                                        # NaN ou infinito não existem em JSON
+        return None                                                                 # devolve None
+    return round(f, casas) if casas is not None else f                              # arredonda para 2 casas
+
+
+def _pct(parte, todo) -> float:                                                     # _pct: percentual (parte em relação ao todo)
+    return round(100 * parte / todo, 1) if todo else 0.0                            # evita dividir por zero
+
+
+def moda(serie: pd.Series):                                                         # moda: o valor que mais se repete
+    m = serie.dropna().mode()                                                       # conta os valores (sem vazios) e pega o mais frequente
+    return None if m.empty else m.iloc[0]                                           # devolve o primeiro, ou None se não houver
+
+
+def _resumo_serie(serie: pd.Series) -> dict:                                        # _resumo_serie: calcula as medidas de uma coluna de números
+    n = int(serie.size)                                                             # quantidade de itens
+    return {                                                                        # monta o dicionário de resultados
+        "clientes": n,                                                              # quantidade de clientes
+        "total": num(serie.sum()),                                                  # soma
+        "media": num(serie.mean()),                                                 # MÉDIA
+        "mediana": num(serie.median()),                                             # MEDIANA (valor do meio)
+        "desvioPadrao": num(serie.std(ddof=1)) if n > 1 else None,                  # desvio padrão (precisa de 2 ou mais itens)
+        "minimo": num(serie.min()),                                                 # menor valor
+        "q1": num(serie.quantile(0.25)),                                            # 1º quartil (25% dos valores ficam abaixo)
+        "q3": num(serie.quantile(0.75)),                                            # 3º quartil (75%)
+        "maximo": num(serie.max()),                                                 # maior valor
+    }                                                                               # fim do dicionário
+
+
+# ---------------------------------------------------------------------- blocos
+def _agrupar(df: pd.DataFrame, coluna: str, nome: str) -> list[dict]:               # _agrupar: calcula tudo por categoria (segmento, nível ou consultor)
+    """Uma linha por categoria, do maior para o menor número de clientes."""
+    saida = []                                                                      # lista de resultados
+    total_clientes, total_fat = len(df), df["faturamento_anual"].sum()              # total de clientes e faturamento total
+    for chave, g in df.groupby(coluna, sort=False):                                 # para cada grupo da categoria
+        r = _resumo_serie(g["faturamento_anual"])                                   # medidas do faturamento desse grupo
+        saida.append({                                                              # acrescenta um dicionário à lista
+            nome: str(chave), "clientes": r["clientes"], "percentual": _pct(len(g), total_clientes),  # nome do grupo, clientes e % de clientes
+            "percentualFaturamento": _pct(g["faturamento_anual"].sum(), total_fat),  # % do faturamento total
+            "faturamentoTotal": r["total"], "total": r["total"], "media": r["media"], "mediana": r["mediana"],  # faturamento total, média e mediana
+            "desvioPadrao": r["desvioPadrao"], "minimo": r["minimo"], "maximo": r["maximo"],  # desvio padrão, mínimo e máximo
+        })                                                                          # fim do dicionário
+    return sorted(saida, key=lambda x: (-x["clientes"], x[nome]))                   # ordena: mais clientes primeiro
+
+
+def _por_mes(df: pd.DataFrame) -> list[dict]:                                       # _por_mes: quantos clientes contrataram em cada mês
+    """Meses contínuos, inclusive os sem contratação."""
+    if df.empty:                                                                    # tabela vazia
+        return []                                                                   # devolve lista vazia
+    por_mes = df.groupby("mes").agg(clientes=("codigo_cliente", "count"), faturamento=("faturamento_anual", "sum"))  # agrupa por mês e conta clientes
+    meses = pd.period_range(df["data_contratacao"].min(), df["data_contratacao"].max(), freq="M").strftime("%Y-%m")  # todos os meses entre o primeiro e o último
+    por_mes = por_mes.reindex(meses, fill_value=0)                                  # meses sem contratação ficam com zero
+    acumulado = por_mes["clientes"].cumsum()                                        # soma acumulada
+    return [{"mes": m, "clientes": int(r.clientes), "faturamento": num(r.faturamento), "acumulado": int(acumulado[m])}  # uma linha por mês
+            for m, r in por_mes.iterrows()]                                         # (continuação) percorre os meses
+
+
+def _por_servico(df: pd.DataFrame) -> list[dict]:                                   # _por_servico: quantos clientes contrataram cada serviço
+    longo = df[["codigo_cliente", "servicos", "faturamento_anual"]].explode("servicos").dropna(subset=["servicos"])  # uma linha por (cliente, serviço)
+    total = len(df)                                                                 # total de clientes
+    saida = [{"servico": str(nome), "contratos": int(g["codigo_cliente"].nunique()),  # monta uma linha por serviço
+              "percentual": _pct(g["codigo_cliente"].nunique(), total),             # percentual de clientes
+              "faturamentoMedio": num(g["faturamento_anual"].mean())}               # faturamento médio de quem contratou
+             for nome, g in longo.groupby("servicos")]                              # para cada serviço
+    return sorted(saida, key=lambda x: (-x["contratos"], x["servico"]))             # ordena: mais contratado primeiro
+
+
+def _correlacao(df: pd.DataFrame) -> dict:                                          # _correlacao: relação entre nº de serviços e faturamento
+    x, y = df["qtd_servicos"].astype(float), df["faturamento_anual"].astype(float)  # x = nº de serviços; y = faturamento
+    base = {"pearson": None, "p": None, "n": int(len(df)), "spearman": None, "spearmanP": None, "interpretacao": None}  # resultado padrão (sem valores)
+    if len(df) < 3 or x.nunique() < 2 or y.nunique() < 2:                           # poucos dados: não dá para calcular
+        return base                                                                 # devolve o padrão
+    r, p = sp.pearsonr(x, y)                                                        # correlação de Pearson (r e p)
+    rho, p_rho = sp.spearmanr(x, y)                                                 # correlação de Spearman
+    forca = "forte" if abs(r) >= 0.7 else "moderada" if abs(r) >= 0.4 else "fraca"  # força: forte, moderada ou fraca
+    base.update({"pearson": num(r, 3), "p": num(p, 6), "spearman": num(rho, 3), "spearmanP": num(p_rho, 6),  # guarda os números
+                 "interpretacao": f"Correlação {forca} {'positiva' if r > 0 else 'negativa'} entre a quantidade de serviços e o faturamento."})  # e a frase explicando
+    return base                                                                     # devolve o resultado
+
+
+# ---------------------------------------------------------------------- função principal
+def calcular(res: ResultadoTransformacao, linhas_recebidas: int) -> dict:           # calcular: função principal; recebe a limpeza e devolve o JSON
+    df = res.tratado                                                                # tabela dos clientes tratados
+    if df.empty:                                                                    # sem clientes
+        raise ValueError("Não há clientes válidos para calcular estatísticas.")     # erro explicando
+    fat = df["faturamento_anual"]                                                   # coluna de faturamento
+    r = _resumo_serie(fat)                                                          # medidas gerais (média, mediana...)
+
+    por_segmento = _agrupar(df, "segmento", "segmento")                             # por segmento
+    por_nivel = _agrupar(df.sort_values("nivel_cliente"), "nivel_cliente", "nivel")  # por nível
+    por_nivel.sort(key=lambda x: x["nivel"])  # A -> C
+    por_consultor = _agrupar(df, "consultor", "consultor")                          # por consultor
+    por_servico = _por_servico(df)                                                  # por serviço
+    por_mes = _por_mes(df)                                                          # por mês
+    correlacao = _correlacao(df)                                                    # correlação
+
+    resumo = {                                                                      # resumo geral (cartões do dashboard)
+        "totalClientes": r["clientes"], "faturamentoTotal": r["total"], "media": r["media"], "mediana": r["mediana"],  # total de clientes, faturamento, média e mediana
+        "desvioPadrao": r["desvioPadrao"], "minimo": r["minimo"], "maximo": r["maximo"], "q1": r["q1"], "q3": r["q3"],  # desvio padrão, mínimo, máximo e quartis
+        "segmentoMaisFrequente": moda(df["segmento"]), "nivelMaisFrequente": moda(df["nivel_cliente"]),  # segmento e nível mais frequentes (moda)
+        "servicoMaisContratado": moda(df["servicos"].explode()),                    # serviço mais contratado (moda)
+        "mediaServicosPorCliente": num(df["qtd_servicos"].mean()),                  # média de serviços por cliente
+        "coeficienteVariacao": num(fat.std(ddof=1) / fat.mean(), 3) if len(fat) > 1 and fat.mean() else None,  # coeficiente de variação (desvio / média)
+        "consultores": int(df["consultor"].nunique()),                              # número de consultores
+    }                                                                               # fim do resumo
+    top = df.sort_values("faturamento_anual", ascending=False).head(5)              # os 5 maiores clientes
+
+    return {                                                                        # devolve o dicionário que vira JSON no banco
+        "geradoEm": datetime.now(timezone.utc).isoformat(timespec="seconds"),       # quando foi gerado
+        "resumo": resumo,                                                           # resumo geral
+        "porSegmento": por_segmento,                                                # clientes por segmento
+        "porNivel": por_nivel,                                                      # clientes por nível
+        "porConsultor": por_consultor,                                              # faturamento por consultor
+        "porServico": por_servico,                                                  # serviços
+        "porMes": por_mes,                                                          # contratações por mês
+        "correlacao": correlacao,                                                   # correlação
+        "topClientes": [{"codigo": x.codigo_cliente, "nome": x.nome_cliente, "segmento": x.segmento,  # 5 maiores clientes
+                         "nivel": x.nivel_cliente, "faturamento": num(x.faturamento_anual)} for x in top.itertuples()],  # (continuação)
+        "qualidade": {                                                              # relatório de qualidade da planilha
+            "linhasRecebidas": int(linhas_recebidas),                               # linhas recebidas
+            "linhasValidas": int(len(df)),                                          # linhas válidas
+            "linhasInvalidas": int(linhas_recebidas - len(df)),                     # linhas inválidas
+            "correcoesSegmento": res.padronizacoes["segmento"],                     # correções de segmento
+            "correcoesConsultor": res.padronizacoes["consultor"],                   # correções de consultor
+            "correcoesNivel": res.padronizacoes["nivel_cliente"],                   # correções de nível
+            "segmentosOriginais": res.segmentos_originais,                          # segmentos que foram corrigidos
+            "avisos": res.avisos,                                                   # avisos
+        },                                                                          # fim da qualidade
+        "insights": gerar_insights(resumo, por_segmento, por_nivel, por_consultor, por_servico, por_mes, correlacao),  # frases de insights
+    }                                                                               # fim do dicionário
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/insights.py
+T: escreve as frases
+------------------------------------------------------------------------------------------
+"""Insights: transforma os números da análise em frases em português."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+
+def brl(valor) -> str:                                                              # brl: formata como dinheiro brasileiro
+    if valor is None:                                                               # sem valor
+        return "—"                                                                  # devolve um traço
+    s = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")       # troca vírgula e ponto: 1,234.50 vira 1.234,50
+    return f"R$ {s}"                                                                # devolve com "R$"
+
+
+def _virg(x) -> str:                                                                # _virg: troca o ponto decimal por vírgula
+    return str(x).replace(".", ",")                                                 # 25.0 vira "25,0"
+
+
+def gerar_insights(resumo, por_segmento, por_nivel, por_consultor, por_servico, por_mes, correlacao) -> list[str]:  # gerar_insights: monta frases em português com os achados
+    ins: list[str] = []                                                             # lista de frases
+    top = por_segmento[0]                                                           # segmento com mais clientes
+    ins.append(f"O segmento {top['segmento']} concentra a maior carteira: {top['clientes']} clientes ({_virg(top['percentual'])}%).")  # frase do segmento
+
+    if resumo["media"] and resumo["mediana"] and resumo["media"] > resumo["mediana"] * 1.1:  # média bem maior que a mediana?
+        ins.append(f"A média de faturamento ({brl(resumo['media'])}) é maior que a mediana ({brl(resumo['mediana'])}): "  # frase explicando
+                   "poucos clientes muito grandes puxam a média para cima, então a mediana descreve melhor o cliente típico.")  # (continuação) poucos clientes grandes puxam a média
+    elif resumo["media"] and resumo["mediana"]:                                     # senão, se são parecidas
+        ins.append(f"Média ({brl(resumo['media'])}) e mediana ({brl(resumo['mediana'])}) são próximas: a carteira é equilibrada.")  # frase de equilíbrio
+
+    a = next((n for n in por_nivel if n["nivel"] == "A"), None)                     # procura o nível A
+    if a:                                                                           # se existe
+        ins.append(f"Os {a['clientes']} clientes nível A representam {_virg(a['percentualFaturamento'])}% do faturamento total, "  # frase do nível A
+                   f"com apenas {_virg(a['percentual'])}% dos clientes.")           # (continuação)
+
+    maior = max(por_consultor, key=lambda c: c["faturamentoTotal"])                 # consultor com maior faturamento
+    ins.append(f"{maior['consultor']} é o consultor com maior faturamento sob gestão ({brl(maior['faturamentoTotal'])}, {maior['clientes']} clientes).")  # frase do consultor
+
+    if por_servico:                                                                 # se há serviços
+        s = por_servico[0]                                                          # o mais contratado
+        ins.append(f"{s['servico']} é o serviço mais contratado: presente em {s['contratos']} clientes ({_virg(s['percentual'])}%).")  # frase do serviço
+
+    if por_mes:                                                                     # se há meses
+        pico = max(e["clientes"] for e in por_mes)                                  # maior número de contratações em um mês
+        meses = [f"{e['mes'][5:]}/{e['mes'][:4]}" for e in por_mes if e["clientes"] == pico]  # meses em que isso aconteceu
+        if len(meses) <= 3:                                                         # poucos meses de pico
+            ins.append(f"O pico de contratações foi em {', '.join(meses)} ({pico} por mês).")  # frase com os meses
+        else:                                                                       # muitos meses de pico
+            ins.append(f"As contratações ficaram distribuídas ao longo do tempo: no máximo {pico} por mês, repetido em {len(meses)} meses.")  # frase de distribuição
+
+    if correlacao["pearson"] is not None:                                           # se a correlação foi calculada
+        ins.append(correlacao["interpretacao"].rstrip(".") + f" (r de Pearson = {_virg(correlacao['pearson'])}).")  # frase da correlação
+    return ins                                                                      # devolve as frases
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/banco.py
+L: grava no banco
+------------------------------------------------------------------------------------------
+"""Banco: GRAVA no PostgreSQL (Azure) os clientes, contratos e o JSON do dashboard. As linhas chegam do backend."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import json                                                                         # json: transforma dicionário em texto JSON
+import logging                                                                      # logging: escreve mensagens no terminal
+from datetime import datetime, timezone                                             # datetime e timezone: data e hora em UTC
+
+import pandas as pd                                                                 # pandas: tabelas de dados (DataFrame)
+from sqlalchemy import create_engine, text                                          # SQLAlchemy: create_engine abre a conexão; text escreve SQL
+from sqlalchemy.engine import Connection, Engine                                    # tipos Connection e Engine (só para indicar o tipo)
+
+from config import database_url                                                    # config: pega o endereço do banco do .env
+
+log = logging.getLogger("analytics")                                                # logger do programa
+
+
+def criar_engine() -> Engine:                                                       # criar_engine: abre a "porta" de conexão com o Azure
+    return create_engine(database_url(), pool_pre_ping=True)                        # pool_pre_ping testa a conexão antes de usar
+
+
+def agora_utc() -> datetime:                                                        # agora_utc: hora atual em UTC
+    """O Spring Boot grava TIMESTAMP em UTC (sem fuso); fazemos o mesmo."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)                          # o Spring grava em UTC sem fuso; fazemos igual
+
+
+# ------------------------------------------------------------------- gravação
+def criar_lote(engine: Engine, arquivo_nome: str, recebidas: int,  # criar_lote: o PYTHON cria o lote (o Java não grava nada do upload)
+               invalidas: int, validas: int, com_aviso: int) -> int:                 # (continuação) contagens que o Java informou
+    """Cria a linha em upload_lote com status PROCESSANDO e devolve o id novo."""
+    with engine.begin() as conn:                                                    # abre uma transação (confirma ao sair do bloco)
+        return conn.execute(                                                        # executa o INSERT e já pede o id gerado
+            text("INSERT INTO upload_lote (arquivo_nome, enviado_em, status, total_linhas, "  # insere o lote...
+                 "linhas_validas, linhas_invalidas, linhas_com_aviso, mensagem) "   # (continuação) contagens
+                 "VALUES (:a, :e, 'PROCESSANDO', :t, :v, :i, :c, 'ETL em andamento...') RETURNING id"),  # status PROCESSANDO
+            {"a": arquivo_nome[:255], "e": agora_utc(), "t": recebidas,  # valores: nome, hora, total
+             "v": validas, "i": invalidas, "c": com_aviso}).scalar_one()            # válidas, inválidas, avisos; devolve o id
+
+
+def marcar_erro(engine: Engine, lote_id: int, mensagem: str) -> None:               # marcar_erro: grava ERRO no lote
+    with engine.begin() as conn:                                                    # abre uma transação
+        conn.execute(text("UPDATE upload_lote SET status = 'ERRO', mensagem = :m WHERE id = :id"),  # SQL: status ERRO e a mensagem
+                     {"id": lote_id, "m": mensagem[:480]})                          # mensagem limitada a 480 caracteres
+
+
+# ------------------------------------------------------------------------ carga
+def gravar_resultado(engine: Engine, lote_id: int, tratado: pd.DataFrame, payload: dict, rejeitadas_etl: int) -> None:  # gravar_resultado: grava clientes, contratos e o JSON
+    """Grava tudo em uma única transação: ou o lote inteiro é processado, ou nada muda."""
+    with engine.begin() as conn:                                                    # uma transação só: ou grava tudo ou nada
+        # reprocessar o mesmo lote substitui o resultado anterior
+        conn.execute(text("DELETE FROM cliente WHERE lote_id = :l"), {"l": lote_id})   # contratos saem em cascata
+        conn.execute(text("DELETE FROM estatistica_lote WHERE lote_id = :l"), {"l": lote_id})  # apaga as estatísticas antigas
+
+        consultores: dict[str, int] = {}                                            # cache: nome do consultor -> id
+        segmentos: dict[str, int] = {}                                              # cache: nome do segmento -> id
+        servicos: dict[str, int] = {}                                               # cache: nome do serviço -> id
+
+        def id_de(tabela: str, nome: str, cache: dict[str, int]) -> int:            # id_de: acha ou cria um consultor/segmento/serviço e devolve o id
+            if nome not in cache:                                                   # se ainda não está no cache
+                conn.execute(text(f"INSERT INTO {tabela} (nome) VALUES (:n) ON CONFLICT (nome) DO NOTHING"), {"n": nome})  # insere (ignora se já existe)
+                cache[nome] = conn.execute(text(f"SELECT id FROM {tabela} WHERE nome = :n"), {"n": nome}).scalar_one()  # busca o id e guarda no cache
+            return cache[nome]                                                      # devolve o id
+
+        for r in tratado.itertuples(index=False):                                   # para cada cliente tratado
+            cliente_id = conn.execute(text("""
+                INSERT INTO cliente (lote_id, codigo_cti, nome, consultor_id, segmento_id, nivel, faturamento_anual, cidade, uf)
+                VALUES (:lote, :codigo, :nome, :consultor, :segmento, :nivel, :fat, :cidade, :uf)
+                RETURNING id
+            """), {
+                "lote": lote_id, "codigo": r.codigo_cliente[:60], "nome": r.nome_cliente[:255],  # código e nome (cortados no tamanho da coluna)
+                "consultor": id_de("consultor", r.consultor[:120], consultores),    # consultor vira id
+                "segmento": id_de("segmento", r.segmento[:40], segmentos),               # segmento vira id
+                "nivel": r.nivel_cliente, "fat": round(float(r.faturamento_anual), 2),  # nível e faturamento com 2 casas
+                "cidade": r.cidade[:120] if isinstance(r.cidade, str) else None,    # cidade (ou nulo)
+                "uf": r.uf if isinstance(r.uf, str) else None,                      # UF (ou nula)
+            }).scalar_one()                                                         # fim do INSERT; devolve o id do cliente
+            for nome_servico in r.servicos:                                         # para cada serviço do cliente
+                conn.execute(text("""
+                    INSERT INTO contrato (cliente_id, servico_id, data_contratacao) VALUES (:c, :s, :d)
+                """), {"c": cliente_id, "s": id_de("servico", nome_servico[:120], servicos),
+                       "d": r.data_contratacao.date()})                             # data da contratação
+
+        conn.execute(text("INSERT INTO estatistica_lote (lote_id, gerado_em, resultado) VALUES (:l, :g, :r)"),  # grava o JSON com média, mediana e gráficos
+                     {"l": lote_id, "g": agora_utc(), "r": json.dumps(payload, ensure_ascii=False)})  # o JSON vai como texto
+
+        mensagem = f"ETL concluído: {len(tratado)} clientes tratados"               # monta a mensagem final
+        if rejeitadas_etl:                                                          # se o ETL recusou alguma linha
+            mensagem += f", {rejeitadas_etl} linhas recusadas na limpeza"           # acrescenta quantas
+        conn.execute(text("UPDATE upload_lote SET status = 'PROCESSADO', mensagem = :m WHERE id = :id"),  # marca o lote como PROCESSADO
+                     {"id": lote_id, "m": mensagem + "."})                          # com a mensagem de resumo
+    log.info("Lote %s gravado: %s clientes, %s consultores, %s segmentos, %s serviços",           # escreve no terminal o resumo
+             lote_id, len(tratado), len(consultores), len(segmentos), len(servicos))                # (continuação) contagens
+------------------------------------------------------------------------------------------
+
+ARQUIVO: analytics-python/testar_conexao.py
+Testa a conexão
+------------------------------------------------------------------------------------------
+"""Testa a conexão com o PostgreSQL do Azure: python testar_conexao.py"""
+from sqlalchemy import text  # import: text escreve SQL
+
+from banco import criar_engine  # import: abre a conexão (usa o .env)
+
+try:  # tenta conectar
+    with criar_engine().connect() as conexao:  # abre a conexão com o banco
+        versao = conexao.execute(text("SELECT version()")).scalar()  # pergunta a versão do PostgreSQL
+        print("Conectou!", versao)  # deu certo: mostra a versão
+        try:  # tenta contar os lotes
+            lotes = conexao.execute(text("SELECT COUNT(*) FROM upload_lote")).scalar()  # conta quantos lotes existem
+            print("Lotes no banco:", lotes)  # mostra quantos lotes já foram enviados
+        except Exception:  # a tabela ainda não existe
+            print("As tabelas ainda não foram criadas. Rode o backend uma vez (mvn spring-boot:run) e teste de novo.")  # explica o que fazer
+except Exception as erro:  # se não conectou:
+    print("Não conectou. Confira o .env e o firewall do Azure (seu IP precisa estar liberado).")  # dica de onde olhar
+    print("Detalhe:", str(erro).splitlines()[0])  # mostra só a primeira linha do erro
+------------------------------------------------------------------------------------------
+
+ARQUIVO: database/schema.sql
+As tabelas
+------------------------------------------------------------------------------------------
+-- CTI Insights — esquema do banco PostgreSQL (Azure Database for PostgreSQL – Servidor Flexível)
+-- Executado automaticamente pelo Spring Boot ao ligar (spring.sql.init). O Spring só grava USUÁRIO; os dados do upload são gravados SÓ pelo Python.
+-- É seguro rodar várias vezes: "IF NOT EXISTS" só cria o que ainda não existe.
+
+-- ===== USUÁRIOS (cadastro, login e liberação de acesso) =====
+CREATE TABLE IF NOT EXISTS usuario (                                            -- tabela dos usuários
+  id            BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,            -- número gerado pelo banco (1, 2, 3...)
+  nome          VARCHAR(120) NOT NULL,                                          -- nome (obrigatório)
+  email         VARCHAR(160) NOT NULL UNIQUE,                                   -- e-mail único: ninguém repete
+  senha_hash    VARCHAR(100) NOT NULL,                                          -- senha criptografada com BCrypt (nunca a senha pura)
+  matricula     VARCHAR(30),                                                    -- matrícula do usuário (opcional)
+  turma         VARCHAR(60),                                                    -- turma (opcional)
+  perfil        VARCHAR(20)  NOT NULL DEFAULT 'USER',                           -- USER (usuário comum) ou ADMIN (administrador)
+  status        VARCHAR(20)  NOT NULL DEFAULT 'PENDENTE',                       -- PENDENTE, APROVADO ou BLOQUEADO
+  criado_em     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP                 -- quando a conta foi criada
+);
+
+-- ===== LOTES (cada envio de planilha é um lote; criado e gravado só pelo PYTHON) =====
+CREATE TABLE IF NOT EXISTS upload_lote (                                        -- tabela dos lotes
+  id               BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,         -- id do lote
+  arquivo_nome     VARCHAR(255) NOT NULL,                                       -- nome do arquivo enviado
+  enviado_em       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,                -- data e hora do envio
+  status           VARCHAR(20) NOT NULL,                                        -- PROCESSANDO, PROCESSADO ou ERRO (quem grava é o Python)
+  total_linhas     INT NOT NULL DEFAULT 0,                                      -- total de linhas da planilha
+  linhas_validas   INT NOT NULL DEFAULT 0,                                      -- quantas estavam válidas
+  linhas_invalidas INT NOT NULL DEFAULT 0,                                      -- quantas tinham erro
+  linhas_com_aviso INT NOT NULL DEFAULT 0,                                      -- quantas tinham só aviso
+  mensagem         VARCHAR(500)                                                 -- mensagem mostrada na tela
+);
+
+-- ===== DADOS VÁLIDOS (gravados pelo Python depois da limpeza) =====
+CREATE TABLE IF NOT EXISTS consultor (                                          -- consultores, sem repetir
+  id    BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,                    -- id do consultor
+  nome  VARCHAR(120) NOT NULL UNIQUE                                            -- nome único
+);
+CREATE TABLE IF NOT EXISTS segmento (                                          -- segmentos de mercado, sem repetir
+  id    BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,                    -- id do segmento
+  nome  VARCHAR(40) NOT NULL UNIQUE                                             -- nome único (Indústria, Comércio...)
+);
+CREATE TABLE IF NOT EXISTS servico (                                            -- serviços oferecidos, sem repetir
+  id    BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,                    -- id do serviço
+  nome  VARCHAR(120) NOT NULL UNIQUE                                            -- nome único (Internet Dedicada, Firewall...)
+);
+CREATE TABLE IF NOT EXISTS cliente (                                            -- clientes válidos
+  id                 BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,       -- id do cliente
+  lote_id            BIGINT NOT NULL REFERENCES upload_lote(id) ON DELETE CASCADE,  -- lote de origem
+  codigo_cti         VARCHAR(60) NOT NULL,                                      -- código do cliente
+  nome               VARCHAR(255) NOT NULL,                                     -- nome do cliente
+  consultor_id       BIGINT NOT NULL REFERENCES consultor(id),                  -- consultor responsável
+  segmento_id        BIGINT NOT NULL REFERENCES segmento(id),                   -- segmento padronizado
+  nivel              CHAR(1) NOT NULL,                                          -- nível A, B ou C
+  faturamento_anual  NUMERIC(16,2) NOT NULL,                                    -- FATURAMENTO ANUAL com 2 casas (base da média e da mediana)
+  cidade             VARCHAR(120),                                              -- cidade
+  uf                 CHAR(2),                                                   -- UF
+  UNIQUE (lote_id, codigo_cti)                                                  -- não repete o código dentro do lote
+);
+CREATE TABLE IF NOT EXISTS contrato (                                           -- contratos: qual cliente contratou qual serviço
+  id                BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,        -- id do contrato
+  cliente_id        BIGINT NOT NULL REFERENCES cliente(id) ON DELETE CASCADE,   -- cliente (apagou o cliente, apaga o contrato)
+  servico_id        BIGINT NOT NULL REFERENCES servico(id),                     -- serviço contratado
+  data_contratacao  DATE NOT NULL,                                              -- data da contratação
+  UNIQUE (cliente_id, servico_id)                                               -- o cliente não contrata o mesmo serviço duas vezes
+);
+
+-- ===== RESULTADO DAS CONTAS (o dashboard lê daqui) =====
+CREATE TABLE IF NOT EXISTS estatistica_lote (                                   -- um resultado por lote
+  lote_id    BIGINT PRIMARY KEY REFERENCES upload_lote(id) ON DELETE CASCADE,   -- lote ao qual o resultado pertence
+  gerado_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,                      -- quando o Python gerou
+  resultado  TEXT NOT NULL                                                      -- JSON com média, mediana e dados dos gráficos
+);
+------------------------------------------------------------------------------------------

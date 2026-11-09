@@ -1,0 +1,464 @@
+=====================================================================
+  GUIA PASSO A PASSO — FASTAPI NO PROJETO CTI
+  SENAI · Análise e Desenvolvimento de Sistemas · Desenvolvimento Backend
+=====================================================================
+
+Este guia acompanha os slides da aula. Siga na ordem.
+Tudo o que estiver depois de "#" nos códigos Python, "//" no Java ou
+"--" no SQL é COMENTÁRIO: o computador ignora, serve só para explicar.
+
+
+---------------------------------------------------------------------
+ PARTE 0 — ENTENDENDO A IDEIA (sem código)
+---------------------------------------------------------------------
+
+API ............ É o "garçom" entre dois programas: leva o pedido de um
+                 e traz a resposta do outro.
+                 No CTI: o Spring (Java) pede, o Python responde.
+
+Framework ...... É uma "cozinha já montada": você não começa do zero,
+                 só escreve as suas receitas (funções).
+
+FastAPI ........ É essa cozinha pronta, em Python, feita para criar
+                 APIs com poucas linhas.
+
+Tudo é Python?  SIM. FastAPI, pandas e SQLAlchemy são BIBLIOTECAS
+                 (pacotes de código pronto) escritas em Python.
+                 Cada uma tem um trabalho:
+                   - FastAPI ..... o garçom: recebe o pedido do Spring (api.py)
+                   - pandas ...... o cozinheiro: limpa e calcula (limpeza.py, analise.py)
+                   - SQLAlchemy .. o estoquista: grava no banco (banco.py)
+
+O caminho de uma planilha no Projeto CTI:
+
+   Front (Vue) --> Spring Boot --> FastAPI --> pandas --> Banco (Neon ou Azure)
+                   valida e        recebe     limpa e     grava as
+                   envia só as     o pedido   calcula     tabelas
+                   linhas boas
+
+
+---------------------------------------------------------------------
+ PARTE 1 — O QUE É AMBIENTE VIRTUAL (.venv)
+---------------------------------------------------------------------
+
+É uma CAIXA DE FERRAMENTAS SÓ DESTE PROJETO. As bibliotecas ficam
+guardadas dentro dela, na pasta ".venv".
+
+  Sem ambiente virtual: tudo é instalado no computador inteiro e um
+  projeto pode atrapalhar o outro (versões diferentes).
+  Com ambiente virtual: cada projeto tem a sua caixa.
+
+  CRIAR a caixa ...... uma vez só.
+  ATIVAR a caixa ..... toda vez que abrir um terminal novo.
+  Como saber se está ativado? Aparece (.venv) no começo da linha.
+
+
+---------------------------------------------------------------------
+ PARTE 2 — PREPARANDO O AMBIENTE (fazer uma vez)
+---------------------------------------------------------------------
+
+Abra a pasta cti-projeto no VS Code.
+Menu: Terminal > Novo Terminal.
+
+PASSO 1 — Entrar na pasta do Python
+    cd analytics-python
+  Por quê? Os comandos valem para a pasta onde você está.
+
+PASSO 2 — Criar o ambiente virtual (UMA VEZ SÓ)
+    python -m venv .venv
+  Por quê? Cria a caixa de ferramentas (pasta .venv).
+
+PASSO 3 — Ativar o ambiente (TODA VEZ que abrir um terminal)
+    Windows:      .venv\Scripts\activate
+    Mac/Linux:    source .venv/bin/activate
+  Por quê? Abre a caixa: tudo o que instalar vai para dentro dela.
+  Deve aparecer (.venv) no começo da linha.
+
+  >> O Windows deu erro "execução de scripts foi desabilitada"?
+     Rode UMA VEZ no PowerShell e tente de novo:
+       Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+PASSO 4 — Instalar as bibliotecas (UMA VEZ SÓ)
+    pip install -r requirements.txt
+  Por quê? O pip é a "loja" e o requirements.txt é a "lista de compras":
+  fastapi, uvicorn, pandas, numpy, scipy, SQLAlchemy, psycopg, python-dotenv.
+
+PASSO 5 — Criar o arquivo .env (UMA VEZ SÓ)
+    Windows:      copy .env.example .env
+    Mac/Linux:    cp .env.example .env
+  Depois abra o .env no VS Code e preencha (veja a PARTE 3).
+  Por quê? O .env guarda o endereço e a senha do banco.
+  SEM ELE, O PYTHON NÃO GRAVA NADA (ele tenta usar "localhost").
+
+PASSO 6 — Testar a conexão com o banco
+    python testar_conexao.py
+  Deve aparecer:  Conectou!
+  Se não conectar: confira o .env (e, no Azure, o firewall).
+
+RESUMO:  passos 2, 4 e 5 = só na primeira vez
+         passos 1 e 3    = toda vez que abrir o VS Code
+
+
+---------------------------------------------------------------------
+ PARTE 3 — O ARQUIVO .env (Neon OU Azure)
+---------------------------------------------------------------------
+
+O arquivo fica em: analytics-python/.env
+Cada linha é NOME=valor, sem espaços e sem aspas.
+O código NÃO muda entre Neon e Azure: só o .env.
+
+>>> Exemplo NEON
+    DB_HOST=ep-xxxx.sa-east-1.aws.neon.tech     # endereço do servidor
+    DB_PORT=5432                                # porta padrão do PostgreSQL
+    DB_NAME=neondb                              # nome do banco
+    DB_USER=neondb_owner                        # usuário
+    DB_PASSWORD=sua-senha                       # senha (NUNCA no Git!)
+    DB_SSLMODE=require                          # conexão segura
+    ETL_API_KEY=                                # chave combinada com o Spring (vazia = sem chave)
+
+  Onde achar no Neon: painel do Neon > Connect. O link tem o formato
+  postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require
+  Cada pedaço vira uma linha do .env.
+  Atenção: o Neon "dorme" quando fica parado. O 1º pedido pode demorar.
+
+>>> Exemplo AZURE (conta estudante, Servidor Flexível)
+    DB_HOST=seuservidor.postgres.database.azure.com
+    DB_PORT=5432
+    DB_NAME=ctiinsights
+    DB_USER=ctiadmin
+    DB_PASSWORD=sua-senha
+    DB_SSLMODE=require
+    ETL_API_KEY=
+
+  Atenção: no portal do Azure, libere o SEU IP no firewall do servidor.
+
+>> IMPORTANTE: o .env do Python (analytics-python/.env) precisa apontar
+   para o MESMO banco do .env do backend (backend/.env).
+
+
+---------------------------------------------------------------------
+ PARTE 4 — SCRIPT x SERVIDOR (sinta a diferença)
+---------------------------------------------------------------------
+
+SCRIPT: roda e termina
+    python testar_conexao.py
+  Lê o arquivo de cima para baixo, mostra o resultado e PARA.
+  O terminal fica livre. (Como uma calculadora: faz a conta e desliga.)
+
+SERVIDOR: liga e fica esperando
+    uvicorn api:app --port 8000
+  Liga e NÃO termina: fica esperando pedidos. O terminal fica "preso".
+  Para desligar: Ctrl + C. (Como uma loja aberta esperando clientes.)
+
+  O que quer dizer cada pedaço:
+    uvicorn ....... o programa que mantém a API ligada
+    api ........... o arquivo api.py (escrito sem o .py)
+    app ........... a variável app = FastAPI() dentro do api.py
+    --port 8000 ... a "porta" onde o serviço atende (o Spring chama essa porta)
+    --reload ...... (opcional) reinicia sozinho quando você salva o código
+
+>> ARMADILHA: NÃO use o botão ▶ (Run Python File) do VS Code no api.py.
+   Ele roda o arquivo como SCRIPT: termina na hora e nada fica ligado.
+   Use sempre o comando uvicorn.
+
+>> Python não precisa compilar: salvou, já pode rodar.
+   (No Java, o mvn compila antes de ligar.)
+
+localhost = "este computador"
+8000      = a porta, como o número do apartamento onde o programa atende
+
+
+---------------------------------------------------------------------
+ PARTE 5 — A ROTA /saude (o "você está aí?")
+---------------------------------------------------------------------
+
+É como ligar para um colega e perguntar "Oi, você está aí?" antes de
+passar um trabalho para ele. Ela não grava nem calcula nada: só mostra
+que o programa está vivo (em inglês: health check).
+
+Código (já existe no api.py):
+
+    from fastapi import FastAPI                     # traz a ferramenta FastAPI
+
+    app = FastAPI(                                  # cria a aplicação web
+        title="CTI Insights — ETL em Python"        # nome que aparece no /docs
+    )
+
+    @app.get("/saude")                              # quando chegar um GET em /saude...
+    def saude() -> dict:                            # ...execute esta função
+        return {"status": "ok"}                     # o dicionário vira JSON na resposta
+
+Teste: com o uvicorn ligado, abra no navegador
+    http://localhost:8000/saude
+Deve aparecer:  {"status":"ok"}
+
+
+---------------------------------------------------------------------
+ PARTE 6 — RODANDO O PROJETO COMPLETO (3 terminais)
+---------------------------------------------------------------------
+
+No VS Code: Terminal > Novo Terminal, TRÊS vezes.
+Os três ficam ABERTOS enquanto você testa. A ordem importa.
+
+TERMINAL 1 — Python (porta 8000)
+    cd analytics-python
+    .venv\Scripts\activate                 (Mac/Linux: source .venv/bin/activate)
+    uvicorn api:app --port 8000 --reload
+  Deve aparecer:  Uvicorn running on http://127.0.0.1:8000
+
+TERMINAL 2 — Backend Java (porta 8080)
+    cd backend
+    mvn spring-boot:run
+  Deve aparecer:  Started CtiProvedorApplication
+
+TERMINAL 3 — Front (porta 5173)
+    cd frontend
+    npm run dev
+  Deve aparecer o endereço:  http://localhost:5173
+
+NAVEGADOR
+  1. Abra http://localhost:5173
+  2. Faça login
+  3. Na tela de Upload, envie o arquivo sample-data/dados.xlsx
+  Resultado esperado: 38 linhas, 32 válidas e 6 com erro.
+
+
+---------------------------------------------------------------------
+ PARTE 7 — TESTANDO A API DO PYTHON SOZINHA
+---------------------------------------------------------------------
+
+OPÇÃO A — /docs (já vem pronto no FastAPI)
+  1. Abra http://localhost:8000/docs
+  2. Clique na rota (ex.: POST /testar)
+  3. Clique em "Try it out"
+  4. Cole o conteúdo de analytics-python/amostras/clientes.json
+  5. Clique em "Execute" e veja a resposta embaixo
+
+OPÇÃO B — Thunder Client (extensão do VS Code)
+  No Spring usamos o Thunder Client porque o Spring não cria tela de
+  teste sozinho. No Python ele também funciona:
+    Método:  POST
+    URL:     http://localhost:8000/testar
+    Body:    JSON  -> cole o conteúdo de amostras/clientes.json
+    Clique:  Send
+
+  Teste rápido:  GET  http://localhost:8000/saude
+
+>> CUIDADO: a rota /etl GRAVA no banco (cria um lote).
+   Para treinar, use a /testar, que NÃO grava nada.
+
+As rotas do serviço Python:
+    GET  /saude   -> confere se está ligado ........... não grava
+    POST /etl     -> chamada pelo Spring: grava tudo .. GRAVA no banco
+    POST /testar  -> você testa pelo /docs ............ não grava
+
+
+---------------------------------------------------------------------
+ PARTE 8 — O QUE ACONTECE POR DENTRO (receber, tratar, gravar)
+---------------------------------------------------------------------
+
+1) O SPRING ENVIA (backend/service/PythonEtlService.java)
+
+    pedido.put("arquivoNome", arquivoNome);   // nome do arquivo (ex.: dados.xlsx)
+    pedido.put("recebidas", recebidas);       // total de linhas da planilha
+    pedido.put("invalidas", invalidas);       // linhas com erro (NÃO são enviadas)
+    pedido.put("comAviso", comAviso);         // linhas boas com algum aviso
+    pedido.put("linhas", linhas);             // a lista com as linhas válidas
+    // depois faz POST em http://localhost:8000/etl (ETL_URL do backend/.env)
+
+2) O FASTAPI RECEBE E CONFERE O FORMATO (analytics-python/api.py)
+
+    class Pedido(BaseModel):                  # o "molde" do JSON
+        arquivoNome: str = "planilha"         # texto; se não vier, vale "planilha"
+        recebidas: int                        # número inteiro e OBRIGATÓRIO
+        invalidas: int = 0                    # número; se não vier, vale 0
+        comAviso: int = 0                     # número; se não vier, vale 0
+        linhas: list[dict[str, Any]]          # lista: cada item é uma linha
+
+  Tipos mais usados: str = texto · int = número inteiro
+                     float = número com vírgula · bool = verdadeiro/falso
+  Faltou campo obrigatório ou veio texto no lugar de número? Erro 422.
+
+3) O PANDAS TRATA (analytics-python/limpeza.py)
+
+    bruto = pd.DataFrame(pedido.linhas)       # a lista vira uma tabela (DataFrame)
+    res = tratar(bruto)                       # limpa cada coluna
+    res.tratado                               # clientes limpos, prontos para gravar
+    res.rejeitadas                            # linhas recusadas, com o motivo
+
+  Exemplos do que é corrigido:
+    "carlos lima"       ->  "Carlos Lima"
+    "IND."              ->  "Indústria"
+    "R$ 1.850.000,00"   ->  1850000.0
+    "15/01/2025"        ->  2025-01-15
+    "Backup;Firewall"   ->  ["Backup", "Firewall"]
+
+4) O PANDAS CALCULA (analytics-python/analise.py)
+   Média, mediana, desvio padrão e totais por segmento, nível,
+   consultor, serviço e mês. Tudo vira um JSON para o dashboard.
+
+5) O BANCO GRAVA (analytics-python/banco.py)
+
+    with engine.begin() as conn:              # abre uma transação: tudo é UM pacote
+        conn.execute(text(
+            "INSERT INTO cliente (lote_id, codigo_cti, nome)"
+            " VALUES (:lote, :codigo, :nome)"     # :lote é um "espaço em branco"
+        ), {"lote": lote_id, "codigo": ..., "nome": ...})   # preenche os espaços
+    # terminou sem erro -> COMMIT (o banco confirma tudo)
+    # deu erro no meio  -> ROLLBACK (o banco desfaz tudo, nada muda)
+
+
+---------------------------------------------------------------------
+ PARTE 9 — CONFERINDO NO BANCO
+---------------------------------------------------------------------
+
+ONDE ABRIR
+  Neon .... site do Neon > seu projeto > SQL Editor > cole > Run
+  Azure ... DBeaver > conexão com o Servidor Flexível > Editor SQL > cole > Executar
+
+CONSULTAS (o "--" é comentário em SQL)
+
+    SELECT status, total_linhas, linhas_validas, mensagem
+      FROM upload_lote;                       -- esperado: PROCESSADO · 38 · 32
+
+    SELECT COUNT(*) FROM cliente;             -- esperado: 32
+    SELECT COUNT(*) FROM segmento;            -- esperado: 6
+    SELECT COUNT(*) FROM consultor;           -- esperado: 4
+    SELECT COUNT(*) FROM servico;             -- esperado: 6
+    SELECT COUNT(*) FROM contrato;            -- esperado: 61
+
+    SELECT nome, cidade, faturamento_anual
+      FROM cliente ORDER BY nome;             -- clientes já limpos, em ordem alfabética
+
+  Status ERRO? Leia a coluna "mensagem": ela explica o motivo.
+
+O QUE FICA GUARDADO (as tabelas são iguais no Neon e no Azure)
+
+    Tabela            O que guarda                           Quem grava
+    ----------------  -------------------------------------  ----------
+    usuario           login, senha protegida e perfil        Java
+    upload_lote       cada planilha enviada e o status       Python
+    cliente           os clientes válidos, já limpos         Python
+    segmento          Indústria, Comércio... sem repetir     Python
+    consultor         nomes dos consultores, sem repetir     Python
+    servico           serviços oferecidos, sem repetir       Python
+    contrato          qual cliente contratou qual serviço    Python
+    estatistica_lote  o JSON com médias e gráficos           Python
+
+  As linhas com erro NÃO são gravadas: só aparecem na tela.
+  Quem cria as tabelas é o backend (schema.sql), na primeira vez que liga.
+
+
+---------------------------------------------------------------------
+ PARTE 10 — DESAFIO: CRIAR A ROTA GET /lotes
+---------------------------------------------------------------------
+
+Objetivo: ver os lotes gravados pelo próprio /docs.
+
+1. No VS Code, abra analytics-python/api.py
+2. Cole no FINAL do arquivo:
+
+    from sqlalchemy import text                       # ferramenta para escrever SQL
+
+    @app.get("/lotes")                                # nova rota: GET em /lotes
+    def listar_lotes():                               # função que será executada
+        with _engine_azure().connect() as conn:       # conecta no banco do .env
+            sql = text("SELECT id, arquivo_nome, status FROM upload_lote ORDER BY id DESC")
+            linhas = conn.execute(sql).mappings().all()   # executa e pega todas as linhas
+        return [dict(l) for l in linhas]              # devolve a lista como JSON
+
+3. Salve (com --reload, o uvicorn reinicia sozinho)
+4. Abra http://localhost:8000/docs > GET /lotes > Try it out > Execute
+5. Deve aparecer o lote com status PROCESSADO
+
+BÔNUS: crie GET /lotes/{lote_id}, que devolve um lote só e responde
+erro 404 (HTTPException) quando o id não existir.
+
+
+---------------------------------------------------------------------
+ PARTE 11 — PROBLEMAS COMUNS
+---------------------------------------------------------------------
+
+"uvicorn não é reconhecido" / "pip não encontrado"
+  -> O ambiente não está ativado (passo 3) ou faltou o pip install (passo 4).
+
+"execução de scripts foi desabilitada" (Windows)
+  -> No PowerShell: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+Cliquei no ▶ e nada aconteceu
+  -> O botão roda como script. Use: uvicorn api:app --port 8000
+
+testar_conexao.py diz "Não conectou"
+  -> Confira o analytics-python/.env (host, usuário, senha, sslmode=require).
+  -> Azure: libere seu IP no firewall.
+
+O upload deu erro 503
+  -> O Python está desligado. Ligue o Terminal 1 (uvicorn).
+
+O upload deu erro 502 "Falha no ETL: ..."
+  -> Leia a mensagem completa. Quase sempre é o .env do Python errado
+     ou faltando.
+
+Nada aparece no banco
+  -> Você usou o /testar? Ele NÃO grava. Só o /etl (chamado pelo Spring) grava.
+  -> O .env do Python aponta para o mesmo banco do backend/.env?
+
+Tabelas não existem
+  -> Ligue o backend uma vez (mvn spring-boot:run): ele cria as tabelas.
+
+
+---------------------------------------------------------------------
+ PARTE 12 — VER OS GRÁFICOS LENDO DO BANCO (Neon ou Azure)
+---------------------------------------------------------------------
+
+O caminho do dado até o gráfico:
+
+   Python grava  -->  banco (tabela estatistica_lote)  -->  Spring lê
+   (banco.py)         Neon ou Azure                         GET /api/dashboard
+                                                                 |
+                                       tela /dashboard  <--------+
+                                       (Chart.js desenha)
+
+PASSO A PASSO
+  1. Ligue os 3 terminais (PARTE 6).
+  2. No navegador (localhost:5173), faça login.
+  3. Envie sample-data/dados.xlsx e clique em "Liberar ... linhas para o back-end".
+  4. Clique em "Ver os gráficos" (ou no menu "Gráficos").
+  5. A tela mostra: 5 cartões (clientes, faturamento, média, mediana,
+     desvio padrão), 5 gráficos, a tabela dos maiores clientes e as frases.
+  6. A caixa "Planilha (lote)" deixa escolher qualquer lote já gravado.
+
+O QUE DEVE APARECER (com dados.xlsx)
+  Clientes: 32 · Média: R$ 2.261.250,00 · Mediana: R$ 1.470.000,00
+
+AS ROTAS NOVAS DO SPRING (exigem login)
+    GET http://localhost:8080/api/dashboard            -> último lote processado + contas
+    GET http://localhost:8080/api/dashboard?loteId=1   -> um lote específico
+    GET http://localhost:8080/api/dashboard/lotes      -> os últimos lotes
+  No Thunder Client: faça login em POST /api/auth/login, copie o "token"
+  e mande em Auth > Bearer.
+
+  Arquivos novos: backend/.../controller/DashboardController.java
+                  backend/.../service/DashboardService.java
+
+CONFERIR NO NEON
+  O arquivo database/consultas-neon.sql tem 8 consultas prontas e comentadas.
+  Abra o SQL Editor do Neon, cole UMA por vez e clique em Run.
+  A consulta 7 mostra a média e a mediana direto do JSON: os mesmos
+  números dos cartões da tela.
+
+SE A TELA MOSTRAR...
+  "Nenhuma planilha foi processada ainda" -> ainda não há lote no banco: envie a planilha.
+  "O Python está processando..."          -> espere: a tela atualiza sozinha a cada 5 s.
+  "O Python não conseguiu processar"      -> o lote ficou com status ERRO; o motivo aparece na tela.
+
+
+---------------------------------------------------------------------
+ SEGURANÇA
+---------------------------------------------------------------------
+- O .env NUNCA vai para o Git (já está no .gitignore).
+- Nunca coloque senha em slide, print ou conversa.
+- Se uma senha vazou, troque no painel do Neon ou do Azure.
+
+Documentação oficial em português: https://fastapi.tiangolo.com/pt/
+=====================================================================

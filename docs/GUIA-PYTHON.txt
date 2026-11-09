@@ -1,0 +1,2184 @@
+====================================================================================================
+AULA 11 - CIÊNCIA DE DADOS COM PYTHON (pandas)  |  Projeto Integrador CTI
+Guia completo: instalação, todos os arquivos Python, arquivo Java de conexão, testes no banco e gráfico no front
+====================================================================================================
+SUMÁRIO (NA ORDEM EM QUE VOCÊ EXECUTA)
+  PASSO 1   Instalar (Python, VS Code, extensões, Node, DBeaver)
+  PASSO 2   Criar a pasta analytics-python e as subpastas
+  PASSO 3   Criar o ambiente virtual (.venv) e instalar os pacotes
+  PASSO 4   Entender o que é ETL (2 minutos de leitura)
+  PASSO 5   Criar os arquivos Python, um por vez, com comentário na frente de cada linha
+  PASSO 6   O arquivo Java que faz a conexão com o Python (PythonEtlService.java, completo)
+  PASSO 7   Rodar (Python, Spring e front)
+  PASSO 8   Testar
+  PASSO 9   Problemas comuns
+  PASSO 10  Perguntas: por que uma API? como os dados chegam? o que vai no banco?
+  PASSO 11  Deploy (cada parte em seu serviço)
+  PASSO 12  Testar no banco: salvou os dados da planilha e as análises? (SQL no DBeaver)
+  PASSO 12.5  O front-end do upload (api.js, upload.js e UploadView.vue, completos e comentados)
+  PASSO 13  (próxima etapa) Exibir os dados no chart do front
+
+COMO LER OS BLOCOS DE CÓDIGO
+  Quase toda linha do código tem um comentário na frente (depois do "#" no Python e do "//" no Java
+  e no JavaScript) explicando o que ela faz. Só ficam sem comentário linhas que apenas fecham um
+  parêntese ou colchete. Antes de cada bloco há: pasta, para que serve, o que usa e como funciona.
+  Faça na ordem: crie o arquivo, cole o código, salve (Ctrl+S) e só então vá para o próximo.
+
+  OS CÓDIGOS ESTÃO COMPLETOS (nada abreviado): cada arquivo é a cópia exata do que roda no projeto.
+  Para copiar: selecione tudo entre "----- CÓDIGO (arquivo) -----" e "----- FIM DE arquivo -----",
+  sem as linhas de marcação, e cole no arquivo do VS Code. Os comentários depois do # (Python) e do //
+  (Java e JavaScript) podem ficar: o código roda igual com eles. No PASSO 6 (Java) e no PASSO 13 (front)
+  o arquivo começa na linha abaixo do título e vai até a linha de traços seguinte.
+
+
+====================================================================================================
+PASSO 1 - INSTALAR
+====================================================================================================
+NO COMPUTADOR
+  1. Python 3.11 ou mais novo ......... https://www.python.org/downloads/
+     No Windows, marque "Add Python to PATH" no instalador.
+     Conferir: abra o terminal e digite   python --version
+  2. VS Code .......................... https://code.visualstudio.com/
+  3. (Já usado no backend) Java 21 e Maven, para rodar o Spring.
+
+NO VS CODE (aba Extensões, ícone dos quadradinhos, Ctrl+Shift+X)
+  - Python ............ da Microsoft (obrigatória: executa e destaca o código Python)
+  - Pylance ........... da Microsoft (vem junto; ajuda a completar o código)
+  - Extension Pack for Java (já usada no backend)
+  Opcionais:
+  - PostgreSQL / DBeaver (programa à parte) para conferir as tabelas no Azure
+
+PACOTES DO PYTHON (instalados com: pip install -r requirements.txt)
+  fastapi .......... cria a API do Python (api.py)
+  uvicorn .......... servidor que mantém a API ligada
+  pandas ........... tabelas de dados (DataFrame): limpar, agrupar e calcular
+  numpy ............ contas com números (o pandas usa por baixo)
+  scipy ............ estatística (correlação)
+  SQLAlchemy ....... conversa com o banco usando SQL
+  psycopg[binary] .. "driver" que fala com o PostgreSQL
+  python-dotenv .... lê o arquivo .env (senha do banco)
+  Já vêm com o Python (não instala): json, sys, re, pathlib, logging, datetime.
+
+PARA O BACKEND E O FRONT (já usados nas aulas anteriores; confira)
+  Java 21 ........ conferir:  java -version
+  Maven .......... conferir:  mvn -version
+  Node.js 20+ .... https://nodejs.org   conferir:  node --version   (traz o npm)
+  DBeaver ........ https://dbeaver.io/download/   (para ver as tabelas no Azure: PASSO 12)
+  Thunder Client . extensão do VS Code para testar rotas HTTP (opcional)
+
+
+====================================================================================================
+PASSO 2 - CRIAR A PASTA E AS SUBPASTAS
+====================================================================================================
+Crie a pasta analytics-python AO LADO da pasta backend (não dentro dela).
+No VS Code: File > Open Folder > abra a pasta do projeto. Depois Terminal > New Terminal:
+
+  Windows (PowerShell):
+      mkdir analytics-python
+      cd analytics-python
+      mkdir amostras
+      New-Item api.py, main.py, limpeza.py, analise.py, insights.py, banco.py, config.py, testar_conexao.py, requirements.txt, .env.example -ItemType File
+
+  Linux / Mac:
+      mkdir -p analytics-python/amostras
+      cd analytics-python
+      touch api.py main.py limpeza.py analise.py insights.py banco.py config.py testar_conexao.py requirements.txt .env.example
+
+O arquivo .env você cria no PASSO 5 (depois do .env.example).
+
+ESTRUTURA FINAL E RESPONSABILIDADE DE CADA ITEM
+
+projeto/
+├─ backend/                         (Java / Spring Boot - aula 10)
+│  └─ src/main/java/com/cti/provedor/
+│     ├─ dto/ClienteDTO.java                 campos da planilha + validações
+│     ├─ controller/ClienteValidacaoController.java   recebe o JSON do Pinia
+│     ├─ controller/ErroHandler.java         devolve erro organizado ao front
+│     └─ service/ClienteValidacaoService.java  duplicidade e padronização
+│        service/PythonEtlService.java  (NOVO) faz o POST /etl na API do Python e envia o JSON
+│
+└─ analytics-python/                [Python + Pandas]   <- pasta ao lado do backend
+   ├─ api.py              ENTRADA (API FastAPI). Recebe o POST /etl do Spring e chama o main.py. Tem o /saude e o /testar.
+   ├─ main.py             processar_lote: trata, calcula e grava no Azure (chamado pela API).
+   ├─ limpeza.py          T: limpa, padroniza e converte tipos (pandas).
+   ├─ analise.py          T: média, mediana, desvio, quartis, agrupamentos, correlação.
+   ├─ insights.py         T: transforma números em frases.
+   ├─ banco.py            L: grava no Azure PostgreSQL (único arquivo que fala com o banco).
+   ├─ config.py           monta o endereço do banco lendo o arquivo .env.
+   ├─ testar_conexao.py   confere se a conexão com o Azure funciona.
+   ├─ requirements.txt    lista de pacotes do Python.
+   ├─ .env                senha e endereço do Azure (você cria; NÃO vai para o Git).
+   ├─ .env.example        modelo do .env.
+   └─ amostras/clientes.json   JSON no formato da aula 10, para testar o Python sem banco
+
+REGRA: cada arquivo tem UMA responsabilidade (como DTO, Controller e Service na aula 10).
+  - limpeza, análise e insights só trabalham com tabelas e números (sem banco).
+  - main.py e banco.py são a "conversa com o mundo de fora" (entrada e saída).
+  - Se trocar o banco, só o banco.py muda.
+
+
+====================================================================================================
+PASSO 3 - CRIAR O AMBIENTE VIRTUAL E INSTALAR OS PACOTES
+====================================================================================================
+No terminal do VS Code, dentro da pasta analytics-python.
+
+  1) Criar o ambiente virtual (uma "caixa" só para os pacotes deste projeto):
+        python -m venv .venv
+  2) Ligar o ambiente (o terminal passa a mostrar (.venv) no começo da linha):
+        Windows (PowerShell):  .venv\Scripts\Activate.ps1
+                               (se bloquear: Set-ExecutionPolicy -Scope Process Bypass)
+        Windows (cmd):         .venv\Scripts\activate.bat
+        Linux / Mac:           source .venv/bin/activate
+  3) No VS Code, escolha o interpretador: Ctrl+Shift+P > "Python: Select Interpreter"
+     > o que termina em .venv.
+  4) Instalar os pacotes:
+        pip install -r requirements.txt
+
+  Observação: o passo de instalar (pip install) só funciona depois de você criar o requirements.txt
+  (primeiro arquivo do PASSO 5). Se preferir, faça o PASSO 5.1 e volte aqui.
+
+  IMPORTANTE: deixe a API do Python ligada ANTES de enviar uma planilha pelo backend. Sem isso o
+  Spring não consegue falar com o Python e a tela mostra o erro (nada é gravado).
+
+
+====================================================================================================
+PASSO 4 - ENTENDER O QUE É ETL
+====================================================================================================
+ETL é o nome do processo que PEGA dados de um lugar, ARRUMA e GUARDA em outro:
+
+  E = Extract   (Extrair)     pegar os dados da origem
+  T = Transform (Transformar) limpar, padronizar, calcular e resumir
+  L = Load      (Carregar)    guardar o resultado no destino
+
+Pense numa cozinha: extrair é receber os ingredientes; transformar é lavar, cortar e
+cozinhar; carregar é servir o prato. Se o ingrediente chega sujo e ninguém lava, o prato
+sai errado. Do mesmo jeito: dado sujo gera número errado.
+
+NO NOSSO PROJETO:
+  E  O backend (Spring) valida a planilha (aula 10) e ENVIA ao Python só as linhas válidas,
+     em JSON. O Python NÃO lê a planilha e NÃO lê o banco.            -> api.py
+  T  Limpar e padronizar (IND. vira Indústria, ANA SOUZA vira Ana Souza, texto vira número
+     e data), calcular média/mediana/desvio e escrever frases.
+                                       -> limpeza.py, analise.py, insights.py
+  L  Gravar clientes, contratos e o resultado (JSON do dashboard) no banco do Azure.
+                                                                       -> banco.py, main.py
+
+Caminho completo dos dados:
+  Planilha -> Pinia valida -> Backend valida e padroniza (aula 10) -> Backend envia JSON
+  -> Python limpa e calcula -> Azure grava -> (próxima etapa) ler do banco e mostrar o dashboard.
+
+Por que existe um arquivo JAVA no backend para chamar o Python?
+  - Spring (Java) e Python são dois programas separados; um não enxerga o outro sozinho.
+  - Quem tem os dados validados é o backend, então é ele quem entrega ao Python.
+  - Alguém precisa "chamar" o Python: uma classe Java faz um POST HTTP e envia o JSON.
+  Nenhum arquivo .py fica dentro do backend. Os .py ficam em analytics-python/.
+
+
+====================================================================================================
+PASSO 5 - CRIAR OS ARQUIVOS, UM POR VEZ (COM A EXPLICAÇÃO NA FRENTE)
+====================================================================================================
+Cada bloco abaixo tem: a pasta, para que serve, o que usa e como funciona, e depois o
+CÓDIGO COMPLETO (com comentário em cada linha). Crie cada arquivo dentro de analytics-python/
+e cole o código. A ordem abaixo é a de criação: cada arquivo só usa os que vieram antes dele.
+
+####################################################################################################
+# PASSO 5.1 - CRIAR O ARQUIVO: requirements.txt
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: Lista os pacotes que o projeto precisa. Equivale ao pom.xml do Java.
+O QUE USA ..: pip (instalador de pacotes do Python).
+COMO FUNCIONA:
+  Cada linha é um pacote; ">=" significa "esta versão ou mais nova".
+  Depois de criar o arquivo: pip install -r requirements.txt
+
+----- CÓDIGO (requirements.txt) -----
+pandas>=2.2
+numpy>=1.26
+scipy>=1.13
+SQLAlchemy>=2.0
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+fastapi>=0.115     # cria a API (api.py)
+uvicorn>=0.30      # servidor que mantém a API ligada
+----- FIM DE requirements.txt -----
+
+>>> PARE E FAÇA: volte ao PASSO 3 e rode:  pip install -r requirements.txt
+
+
+
+####################################################################################################
+# PASSO 5.2 - CRIAR O ARQUIVO: .env.example
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: Modelo do arquivo de senhas. Copie para ".env" e preencha. O .env nunca vai para o Git.
+O QUE USA ..: python-dotenv (lê o arquivo).
+COMO FUNCIONA:
+  Guarda host, porta, nome do banco, usuário, senha e o modo SSL do Azure.
+
+----- CÓDIGO (.env.example) -----
+# Copie este arquivo para ".env" (cp .env.example .env) e preencha com os dados do SEU servidor Azure.
+# O arquivo .env nunca vai para o Git (tem senha!).
+DB_HOST=SEU-SERVIDOR.postgres.database.azure.com
+DB_PORT=5432
+DB_NAME=ctiinsights
+DB_USER=ctiadmin
+DB_PASSWORD=sua-senha
+DB_SSLMODE=require
+
+# Chave combinada com o backend (ETL_KEY no backend/.env). Vazio = sem chave (só para estudar no seu computador).
+ETL_API_KEY=
+----- FIM DE .env.example -----
+
+
+####################################################################################################
+# PASSO 5.3 - CRIAR O ARQUIVO: config.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: Monta o endereço de conexão com o banco usando as variáveis do .env.
+O QUE USA ..: os (variáveis de ambiente), pathlib.Path (caminho do arquivo), python-dotenv (load_dotenv), SQLAlchemy (URL).
+COMO FUNCIONA:
+  1) load_dotenv lê o .env que está na mesma pasta.
+  2) database_url() monta o endereço do PostgreSQL com DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME.
+  3) sslmode=require = conexão criptografada (o Azure exige).
+
+----- CÓDIGO (config.py) -----
+"""Configuração de conexão com o banco. Lê as variáveis do arquivo .env (pasta analytics-python)."""
+import os                                                      # import: os = lê variáveis de ambiente
+from pathlib import Path                                       # import: Path = trabalha com caminhos de arquivos
+
+from dotenv import load_dotenv                                 # import: load_dotenv lê o arquivo .env
+from sqlalchemy.engine import URL                              # import: URL monta o endereço do banco
+
+load_dotenv(Path(__file__).resolve().parent / ".env")   # lê o arquivo .env que está na pasta analytics-python
+
+
+def database_url() -> URL:                                     # função: devolve o endereço de conexão com o banco
+    """Monta o endereço do banco com as variáveis DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD e DB_SSLMODE.
+
+    No Azure Database for PostgreSQL use DB_SSLMODE=require.
+    """
+    return URL.create(                                         # monta o endereço do PostgreSQL
+        "postgresql+psycopg",                                  # driver: psycopg (conversa com o PostgreSQL)
+        username=os.getenv("DB_USER", "cti"),                  # usuário (do .env)
+        password=os.getenv("DB_PASSWORD", "cti123"),           # senha (do .env)
+        host=os.getenv("DB_HOST", "localhost"),                # servidor (no Azure termina com .postgres.database.azure.com)
+        port=int(os.getenv("DB_PORT", "5432")),                # porta padrão do PostgreSQL
+        database=os.getenv("DB_NAME", "ctiinsights"),          # nome do banco
+        query={"sslmode": os.getenv("DB_SSLMODE", "prefer")},  # sslmode=require: conexão criptografada (o Azure exige)
+    )                                                          # fecha o bloco
+----- FIM DE config.py -----
+
+
+####################################################################################################
+# PASSO 5.4 - CRIAR O ARQUIVO: limpeza.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: T (Transformar) - primeira etapa. Recebe a tabela de clientes e devolve a tabela LIMPA e PADRONIZADA, mais as linhas recusadas.
+O QUE USA ..: pandas (DataFrame), re (padrões de texto), unicodedata (tira acento), dataclasses, datetime.
+COMO FUNCIONA:
+  - O JSON da aula 10 usa camelCase (codigoCliente); a primeira linha converte para snake_case.
+  - limpar_texto: tira espaços sobrando (igual ao trim() do Java).
+  - titulo: "ANA SOUZA" vira "Ana Souza".
+  - padronizar_segmento: dicionário SEGMENTOS; "IND.", "Industria" e "INDÚSTRIA" viram "Indústria".
+  - padronizar_servicos: "A; B" vira lista de nomes oficiais, sem repetir.
+  - parse_numero e parse_data: texto vira número (aceita "R$ 1.850.000,50") e data (aaaa-mm-dd ou dd/mm/aaaa).
+  - tratar(): função principal; junta tudo, confere obrigatórios e devolve ResultadoTransformacao
+    (clientes tratados + linhas recusadas + contagem de correções).
+  - O backend já validou; aqui há só uma proteção extra para o modo de estudo com planilha.
+
+----- CÓDIGO (limpeza.py) -----
+"""Transformação: limpeza, padronização e conversão de tipos (etapas 2 a 5 da aba ciencia_de_dados)."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import math                                                                         # math: funções matemáticas (isfinite)
+import re                                                                           # re: expressões regulares (padrões de texto)
+import unicodedata                                                                  # unicodedata: remove acentos
+from dataclasses import dataclass, field                                            # dataclass: cria classes só de dados com pouco código
+from datetime import date, datetime                                                 # date e datetime: datas
+
+import pandas as pd                                                                 # pandas: tabelas de dados (DataFrame)
+
+COLUNAS = [                                                                         # as 10 colunas da planilha
+    "codigo_cliente", "nome_cliente", "consultor", "segmento", "nivel_cliente",     # (continuação)
+    "faturamento_anual", "servicos_contratados", "data_contratacao", "cidade", "uf",  # (continuação)
+]                                                                                   # fecha o bloco
+OBRIGATORIAS = COLUNAS[:8]                                                          # as 8 primeiras são obrigatórias
+
+# Chave = texto sem acento, minúsculo e sem pontuação (veja _simples). Valor = nome padronizado.
+SEGMENTOS = {                                                                       # dicionário: texto simplificado -> nome oficial do segmento
+    "ind": "Indústria", "industria": "Indústria", "industrial": "Indústria",        # Indústria (várias formas de escrever)
+    "com": "Comércio", "comercio": "Comércio",                                      # Comércio
+    "serv": "Serviços", "servico": "Serviços", "servicos": "Serviços",              # Serviços
+    "saude": "Saúde",                                                               # Saúde
+    "edu": "Educação", "educacao": "Educação",                                      # Educação
+    "tec": "Tecnologia", "ti": "Tecnologia", "tecnologia": "Tecnologia",            # Tecnologia
+}                                                                                   # fecha o bloco
+SERVICOS = {                                                                        # dicionário: nome simplificado -> nome oficial do serviço
+    "internet dedicada": "Internet Dedicada",                                       # Internet Dedicada
+    "link empresarial": "Link Empresarial",                                         # Link Empresarial
+    "firewall": "Firewall",                                                         # Firewall
+    "backup": "Backup",                                                             # Backup
+    "mpls": "MPLS",                                                                 # MPLS
+    "cloud": "Cloud",                                                               # Cloud
+}                                                                                   # fecha o bloco
+NIVEIS = {"A", "B", "C"}                                                            # níveis aceitos
+PARTICULAS = {"de", "da", "do", "das", "dos", "e"}                                  # palavras que ficam em minúsculo no nome
+
+
+def _simples(texto: str) -> str:                                                    # _simples: tira acento, deixa minúsculo e sem pontuação
+    sem_acento = "".join(c for c in unicodedata.normalize("NFKD", str(texto)) if not unicodedata.combining(c))  # separa cada letra do seu acento e descarta o acento
+    return re.sub(r"[^a-z0-9]+", " ", sem_acento.lower()).strip()                   # troca símbolos por espaço e tira as pontas
+
+
+def _vazio(v) -> bool:                                                              # _vazio: true se o valor é nulo ou NaN
+    if v is None:                                                                   # None é vazio
+        return True                                                                 # então devolve true
+    try:                                                                            # tenta perguntar ao pandas
+        return bool(pd.isna(v))                                                     # isna detecta NaN e None
+    except (TypeError, ValueError):                                                 # se não souber, não é vazio
+        return False                                                                # devolve false
+
+
+def limpar_texto(v) -> str | None:                                                  # limpar_texto: apaga espaços sobrando
+    """Remove espaços das pontas e duplicados; vazio vira None."""
+    if _vazio(v):                                                                   # vazio
+        return None                                                                 # devolve None
+    t = re.sub(r"\s+", " ", str(v)).strip()                                         # troca vários espaços por um e corta as pontas
+    return t or None                                                                # texto vazio vira None
+
+
+def _aplicar(serie: pd.Series, funcao) -> pd.Series:                                # _aplicar: aplica uma função a cada item da coluna
+    """Como Series.map, mas sempre devolve dtype object e mantém None (o pandas 3 trocaria por NaN)."""
+    return pd.Series([funcao(v) for v in serie], index=serie.index, dtype=object)   # cria a nova coluna mantendo None
+
+
+def titulo(texto: str | None) -> str | None:                                        # titulo: "ANA SOUZA" vira "Ana Souza"
+    """'ANA SOUZA' -> 'Ana Souza'; mantém 'de', 'da', 'do'... em minúsculo."""
+    if texto is None:                                                               # sem texto
+        return None                                                                 # devolve None
+    palavras = texto.lower().split(" ")                                             # quebra em palavras minúsculas
+    return " ".join(p if (i > 0 and p in PARTICULAS) else p.capitalize() for i, p in enumerate(palavras))  # 'da', 'de'... ficam minúsculas; as outras com inicial maiúscula
+
+
+def padronizar_segmento(texto: str | None) -> tuple[str | None, bool]:              # padronizar_segmento: devolve (nome oficial, foi reconhecido?)
+    """Devolve (segmento padronizado, reconhecido?). Desconhecido vira Título e fica sinalizado."""
+    if texto is None:                                                               # sem texto
+        return None, False                                                          # devolve (None, falso)
+    chave = _simples(texto)                                                         # chave simplificada
+    if chave in SEGMENTOS:                                                          # está no dicionário?
+        return SEGMENTOS[chave], True                                               # sim: nome oficial e reconhecido
+    return titulo(texto), False                                                     # não: devolve em formato Título, marcado como desconhecido
+
+
+def padronizar_servicos(texto: str | None) -> list[str]:                            # padronizar_servicos: texto "A; B" vira lista de nomes oficiais
+    if texto is None:                                                               # sem texto
+        return []                                                                   # lista vazia
+    vistos: list[str] = []                                                          # lista de serviços já vistos (sem repetir)
+    for parte in texto.split(";"):                                                  # para cada pedaço separado por ;
+        parte = limpar_texto(parte)                                                 # limpa o pedaço
+        if not parte:                                                               # vazio: pula
+            continue                                                                # continue = vai para o próximo pedaço
+        nome = SERVICOS.get(_simples(parte)) or titulo(parte)                       # nome oficial, ou formato Título se não estiver no dicionário
+        if nome not in vistos:                                                      # se ainda não está na lista
+            vistos.append(nome)                                                     # acrescenta
+    return vistos                                                                   # devolve a lista
+
+
+def parse_numero(v) -> float | None:                                                # parse_numero: texto vira número (aceita R$ e vírgula)
+    """Aceita 1850000, '1850000.50', '1.850.000,50' e 'R$ 1.850.000,50'. Inválido -> None."""
+    if _vazio(v):                                                                   # vazio
+        return None                                                                 # devolve None
+    if isinstance(v, (int, float)):                                                 # já é número?
+        return float(v) if math.isfinite(float(v)) else None                        # devolve como float (se for finito)
+    t = re.sub(r"\s", "", str(v).replace("R$", "").replace(" ", ""))                # tira "R$" e espaços
+    if not re.fullmatch(r"-?[0-9.,]+", t or ""):                                    # se sobrou letra, não é número
+        return None                                                                 # devolve None
+    if "." in t and "," in t:                                                       # tem ponto e vírgula juntos?
+        t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")  # o último símbolo é o decimal
+    elif "," in t:                                                                  # só vírgula
+        t = t.replace(",", "") if t.count(",") > 1 else t.replace(",", ".")         # várias vírgulas = milhar; uma = decimal
+    elif "." in t and re.fullmatch(r"-?\d{1,3}(\.\d{3})+", t):                      # só ponto no formato de milhar (1.850.000)
+        t = t.replace(".", "")                                                      # tira os pontos
+    try:                                                                            # tenta converter
+        return float(t)                                                             # devolve o número
+    except ValueError:                                                              # não deu
+        return None                                                                 # devolve None
+
+
+def parse_data(v) -> date | None:                                                   # parse_data: texto vira data (aaaa-mm-dd ou dd/mm/aaaa)
+    if _vazio(v):                                                                   # vazio
+        return None                                                                 # devolve None
+    if isinstance(v, (datetime, pd.Timestamp)):                                     # já é data do pandas/Excel?
+        return v.date()                                                             # devolve só a data
+    if isinstance(v, date):                                                         # já é date?
+        return v                                                                    # devolve igual
+    t = str(v).strip()                                                              # trata como texto
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$", t)                        # procura o formato aaaa-mm-dd
+    try:                                                                            # tenta converter
+        if m:                                                                       # achou o formato ISO
+            return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))          # monta a data
+        return datetime.strptime(t, "%d/%m/%Y").date()                              # senão tenta dd/mm/aaaa
+    except ValueError:                                                              # data inexistente
+        return None                                                                 # devolve None
+
+
+@dataclass                                                                          # dataclass: classe só para carregar o resultado
+class ResultadoTransformacao:                                                       # resultado do tratamento
+    tratado: pd.DataFrame                                                           # clientes tratados (tabela)
+    rejeitadas: pd.DataFrame                                                        # linhas recusadas (tabela)
+    padronizacoes: dict[str, int] = field(default_factory=dict)                     # quantas padronizações foram feitas
+    segmentos_originais: list[dict] = field(default_factory=list)                   # segmentos que foram corrigidos
+    avisos: list[str] = field(default_factory=list)                                 # avisos de qualidade
+
+
+def tratar(bruto: pd.DataFrame) -> ResultadoTransformacao:                          # tratar: função principal da limpeza
+    """Recebe as linhas como texto e devolve o DataFrame tratado + as linhas que o ETL recusou."""
+    df = bruto.copy().reset_index(drop=True)                                        # cópia da tabela com índice 0,1,2...
+    df.columns = [re.sub(r"(?<!^)(?=[A-Z])", "_", str(c)).lower() for c in df.columns]  # codigoCliente (JSON da aula 10) vira codigo_cliente
+    for c in COLUNAS:                                                               # para cada coluna esperada
+        if c not in df.columns:                                                     # se não veio na tabela
+            df[c] = None                                                            # cria vazia
+    if "linha" not in df.columns:                                                   # se não há número da linha
+        df["linha"] = df.index + 2  # cabeçalho é a linha 1 da planilha
+    df = df[["linha"] + COLUNAS].astype(object)                                     # deixa só as colunas que usamos
+
+    # ---- limpeza (str.strip) ----
+    brutos = {c: df[c].copy() for c in COLUNAS}                                     # guarda os valores originais (para contar mudanças)
+    for c in COLUNAS:                                                               # para cada coluna
+        if c not in ("faturamento_anual", "data_contratacao"):                      # menos faturamento e data (tratados depois)
+            df[c] = _aplicar(df[c], limpar_texto)                                   # limpa os espaços
+
+    # ---- padronização ----
+    df["segmento_original"] = df["segmento"]                                        # guarda o segmento original
+    padrao = [padronizar_segmento(v) for v in df["segmento"]]                       # padroniza cada segmento
+    df["segmento"] = pd.Series([p[0] for p in padrao], index=df.index, dtype=object)  # coluna segmento com o nome oficial
+    desconhecidos_idx = {i for i, (v, (_, ok)) in zip(df.index, zip(df["segmento_original"], padrao)) if v is not None and not ok}  # linhas cujo segmento não foi reconhecido
+
+    df["codigo_cliente"] = _aplicar(df["codigo_cliente"], lambda x: x.upper() if x else x)  # código em maiúsculas
+    df["consultor"] = _aplicar(df["consultor"], titulo)                             # consultor em formato Título
+    df["nivel_cliente"] = _aplicar(df["nivel_cliente"], lambda x: x.upper() if x else x)  # nível em maiúsculas
+    df["uf"] = _aplicar(df["uf"], lambda x: x.upper() if x and len(x) == 2 and x.isalpha() else None)  # UF em maiúsculas (ou None se inválida)
+    df["servicos"] = _aplicar(df["servicos_contratados"], padronizar_servicos)      # serviços viram lista
+
+    # ---- conversão de tipos ----
+    df["faturamento_anual"] = _aplicar(df["faturamento_anual"], parse_numero)       # faturamento vira número
+    df["data_contratacao"] = _aplicar(df["data_contratacao"], parse_data)           # data vira data
+
+    # ---- validação defensiva (o backend já validou; aqui é uma proteção extra) ----
+    motivos: list[list[str]] = [[] for _ in range(len(df))]                         # lista de motivos de recusa de cada linha
+    for i, row in df.iterrows():                                                    # para cada linha
+        for c in OBRIGATORIAS:                                                      # para cada coluna obrigatória
+            vazio = (not row["servicos"]) if c == "servicos_contratados" else _vazio(row[c])  # serviços: lista vazia conta como vazio
+            if vazio:                                                               # se está vazio
+                motivos[i].append(f"{c}: vazio ou inválido")                        # anota o motivo
+        if i in desconhecidos_idx:                                                  # segmento desconhecido?
+            motivos[i].append(f"segmento: '{row['segmento_original']}' não reconhecido")  # anota o motivo
+        if not _vazio(row["nivel_cliente"]) and row["nivel_cliente"] not in NIVEIS:  # nível fora de A, B, C?
+            motivos[i].append(f"nivel_cliente: '{row['nivel_cliente']}' fora de A/B/C")  # anota o motivo
+        if not _vazio(row["faturamento_anual"]) and row["faturamento_anual"] < 0:   # faturamento negativo?
+            motivos[i].append("faturamento_anual: negativo")                        # anota o motivo
+    duplicado = df["codigo_cliente"].notna() & df["codigo_cliente"].duplicated(keep="first")  # código repetido (mantém o primeiro)
+    for i in df.index[duplicado]:                                                   # para cada repetido
+        motivos[i].append("codigo_cliente: duplicado")                              # anota o motivo
+
+    recusada = pd.Series([bool(m) for m in motivos], index=df.index)                # linhas recusadas = as que têm algum motivo
+    rejeitadas = df.loc[recusada, ["linha", "codigo_cliente", "nome_cliente"]].copy()  # tabela das recusadas
+    rejeitadas["motivo"] = [" | ".join(motivos[i]) for i in df.index[recusada]]     # coluna com os motivos
+
+    # ---- quantos valores mudaram na padronização (para o relatório de qualidade) ----
+    def mudou(coluna: str, original: pd.Series) -> int:                             # mudou: conta quantos valores foram alterados
+        pares = zip(original, df[coluna])                                           # compara o original com o tratado
+        return sum(1 for a, b in pares if not _vazio(a) and str(a) != ("" if _vazio(b) else str(b)))  # soma as diferenças
+
+    padronizacoes = {                                                               # relatório de qualidade
+        "segmento": mudou("segmento", brutos["segmento"]),                          # segmentos corrigidos
+        "consultor": mudou("consultor", brutos["consultor"]),                       # consultores corrigidos
+        "nivel_cliente": mudou("nivel_cliente", brutos["nivel_cliente"]),           # níveis corrigidos
+    }                                                                               # fim do relatório
+    contagem = (                                                                    # conta ocorrências de cada segmento original
+        df[~recusada][["segmento_original", "segmento"]].dropna().value_counts().reset_index(name="ocorrencias")  # (continuação)
+    )                                                                               # (continuação)
+    segmentos_originais = [                                                         # lista dos segmentos corrigidos
+        {"original": str(r.segmento_original), "padronizado": str(r.segmento), "ocorrencias": int(r.ocorrencias)}  # original, padronizado e quantas vezes
+        for r in contagem.sort_values(["segmento", "ocorrencias"], ascending=[True, False]).itertuples()  # ordenado por segmento
+    ]                                                                               # fim da lista
+
+    avisos: list[str] = []                                                          # lista de avisos (vazia por enquanto)
+
+    tratado = df[~recusada].copy()                                                  # tratado = só as linhas boas
+    tratado["faturamento_anual"] = tratado["faturamento_anual"].astype(float)       # faturamento como número decimal
+    tratado["qtd_servicos"] = tratado["servicos"].map(len)                          # quantidade de serviços por cliente
+    tratado["data_contratacao"] = pd.to_datetime(tratado["data_contratacao"].astype("datetime64[ns]"))  # data como data/hora do pandas
+    tratado["mes"] = tratado["data_contratacao"].dt.strftime("%Y-%m")               # mês no formato aaaa-mm
+    tratado = tratado.reset_index(drop=True)[[                                      # organiza as colunas na ordem final
+        "linha", "codigo_cliente", "nome_cliente", "consultor", "segmento", "segmento_original", "nivel_cliente",  # (continuação)
+        "faturamento_anual", "servicos", "qtd_servicos", "data_contratacao", "mes", "cidade", "uf",  # (continuação)
+    ]]                                                                              # fecha o bloco
+    return ResultadoTransformacao(tratado, rejeitadas.reset_index(drop=True), padronizacoes, segmentos_originais, avisos)  # devolve o resultado completo
+----- FIM DE limpeza.py -----
+
+
+####################################################################################################
+# PASSO 5.5 - CRIAR O ARQUIVO: analise.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: T (Transformar) - calcula os números do dashboard: média, mediana, desvio padrão, quartis, totais por segmento/nível/consultor/serviço/mês e correlação.
+O QUE USA ..: pandas (groupby, mean, median, std, quantile), scipy.stats (correlação de Pearson e Spearman).
+COMO FUNCIONA:
+  - média = soma / quantidade; mediana = valor do meio; desvio padrão = quanto os valores se espalham.
+  - _resumo_serie: calcula as medidas de uma coluna de números.
+  - _agrupar: usa groupby para repetir o cálculo em cada segmento, nível ou consultor.
+  - _por_mes e _por_servico: contratações por mês e clientes por serviço.
+  - _correlacao: relação entre nº de serviços e faturamento.
+  - calcular(): função principal; devolve um dicionário que vira JSON (chaves em camelCase
+    para o JavaScript usar sem conversão). Chama insights.gerar_insights para as frases.
+
+----- CÓDIGO (analise.py) -----
+"""Análise: calcula as estatísticas do dashboard: média, mediana, moda, desvio padrão, quartis e correlação.
+
+Devolve o objeto `Estatisticas` do contrato (docs/CONTRATO.md): camelCase, 100% serializável em JSON
+(NaN e infinito viram null)."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import math                                                                         # math: funções matemáticas
+from datetime import datetime, timezone                                             # datetime e timezone: data e hora em UTC
+
+import pandas as pd                                                                 # pandas: tabelas de dados
+from scipy import stats as sp                                                       # scipy.stats: testes estatísticos (correlação)
+
+from insights import gerar_insights                                                 # gerar_insights: monta as frases (insights.py)
+from limpeza import ResultadoTransformacao                                          # o resultado da limpeza (limpeza.py)
+
+
+# ------------------------------------------------------------------ utilitários
+def num(x, casas: int | None = 2):                                                  # num: converte para número seguro para JSON
+    """Número Python seguro para JSON (NaN/inf viram None)."""
+    if x is None:                                                                   # sem valor
+        return None                                                                 # devolve None
+    try:                                                                            # tenta converter
+        f = float(x)                                                                # vira float
+    except (TypeError, ValueError):                                                 # se não der
+        return None                                                                 # devolve None
+    if not math.isfinite(f):                                                        # NaN ou infinito não existem em JSON
+        return None                                                                 # devolve None
+    return round(f, casas) if casas is not None else f                              # arredonda para 2 casas
+
+
+def _pct(parte, todo) -> float:                                                     # _pct: percentual (parte em relação ao todo)
+    return round(100 * parte / todo, 1) if todo else 0.0                            # evita dividir por zero
+
+
+def moda(serie: pd.Series):                                                         # moda: o valor que mais se repete
+    m = serie.dropna().mode()                                                       # conta os valores (sem vazios) e pega o mais frequente
+    return None if m.empty else m.iloc[0]                                           # devolve o primeiro, ou None se não houver
+
+
+def _resumo_serie(serie: pd.Series) -> dict:                                        # _resumo_serie: calcula as medidas de uma coluna de números
+    n = int(serie.size)                                                             # quantidade de itens
+    return {                                                                        # monta o dicionário de resultados
+        "clientes": n,                                                              # quantidade de clientes
+        "total": num(serie.sum()),                                                  # soma
+        "media": num(serie.mean()),                                                 # MÉDIA
+        "mediana": num(serie.median()),                                             # MEDIANA (valor do meio)
+        "desvioPadrao": num(serie.std(ddof=1)) if n > 1 else None,                  # desvio padrão (precisa de 2 ou mais itens)
+        "minimo": num(serie.min()),                                                 # menor valor
+        "q1": num(serie.quantile(0.25)),                                            # 1º quartil (25% dos valores ficam abaixo)
+        "q3": num(serie.quantile(0.75)),                                            # 3º quartil (75%)
+        "maximo": num(serie.max()),                                                 # maior valor
+    }                                                                               # fim do dicionário
+
+
+# ---------------------------------------------------------------------- blocos
+def _agrupar(df: pd.DataFrame, coluna: str, nome: str) -> list[dict]:               # _agrupar: calcula tudo por categoria (segmento, nível ou consultor)
+    """Uma linha por categoria, do maior para o menor número de clientes."""
+    saida = []                                                                      # lista de resultados
+    total_clientes, total_fat = len(df), df["faturamento_anual"].sum()              # total de clientes e faturamento total
+    for chave, g in df.groupby(coluna, sort=False):                                 # para cada grupo da categoria
+        r = _resumo_serie(g["faturamento_anual"])                                   # medidas do faturamento desse grupo
+        saida.append({                                                              # acrescenta um dicionário à lista
+            nome: str(chave), "clientes": r["clientes"], "percentual": _pct(len(g), total_clientes),  # nome do grupo, clientes e % de clientes
+            "percentualFaturamento": _pct(g["faturamento_anual"].sum(), total_fat),  # % do faturamento total
+            "faturamentoTotal": r["total"], "total": r["total"], "media": r["media"], "mediana": r["mediana"],  # faturamento total, média e mediana
+            "desvioPadrao": r["desvioPadrao"], "minimo": r["minimo"], "maximo": r["maximo"],  # desvio padrão, mínimo e máximo
+        })                                                                          # fim do dicionário
+    return sorted(saida, key=lambda x: (-x["clientes"], x[nome]))                   # ordena: mais clientes primeiro
+
+
+def _por_mes(df: pd.DataFrame) -> list[dict]:                                       # _por_mes: quantos clientes contrataram em cada mês
+    """Meses contínuos, inclusive os sem contratação."""
+    if df.empty:                                                                    # tabela vazia
+        return []                                                                   # devolve lista vazia
+    por_mes = df.groupby("mes").agg(clientes=("codigo_cliente", "count"), faturamento=("faturamento_anual", "sum"))  # agrupa por mês e conta clientes
+    meses = pd.period_range(df["data_contratacao"].min(), df["data_contratacao"].max(), freq="M").strftime("%Y-%m")  # todos os meses entre o primeiro e o último
+    por_mes = por_mes.reindex(meses, fill_value=0)                                  # meses sem contratação ficam com zero
+    acumulado = por_mes["clientes"].cumsum()                                        # soma acumulada
+    return [{"mes": m, "clientes": int(r.clientes), "faturamento": num(r.faturamento), "acumulado": int(acumulado[m])}  # uma linha por mês
+            for m, r in por_mes.iterrows()]                                         # (continuação) percorre os meses
+
+
+def _por_servico(df: pd.DataFrame) -> list[dict]:                                   # _por_servico: quantos clientes contrataram cada serviço
+    longo = df[["codigo_cliente", "servicos", "faturamento_anual"]].explode("servicos").dropna(subset=["servicos"])  # uma linha por (cliente, serviço)
+    total = len(df)                                                                 # total de clientes
+    saida = [{"servico": str(nome), "contratos": int(g["codigo_cliente"].nunique()),  # monta uma linha por serviço
+              "percentual": _pct(g["codigo_cliente"].nunique(), total),             # percentual de clientes
+              "faturamentoMedio": num(g["faturamento_anual"].mean())}               # faturamento médio de quem contratou
+             for nome, g in longo.groupby("servicos")]                              # para cada serviço
+    return sorted(saida, key=lambda x: (-x["contratos"], x["servico"]))             # ordena: mais contratado primeiro
+
+
+def _correlacao(df: pd.DataFrame) -> dict:                                          # _correlacao: relação entre nº de serviços e faturamento
+    x, y = df["qtd_servicos"].astype(float), df["faturamento_anual"].astype(float)  # x = nº de serviços; y = faturamento
+    base = {"pearson": None, "p": None, "n": int(len(df)), "spearman": None, "spearmanP": None, "interpretacao": None}  # resultado padrão (sem valores)
+    if len(df) < 3 or x.nunique() < 2 or y.nunique() < 2:                           # poucos dados: não dá para calcular
+        return base                                                                 # devolve o padrão
+    r, p = sp.pearsonr(x, y)                                                        # correlação de Pearson (r e p)
+    rho, p_rho = sp.spearmanr(x, y)                                                 # correlação de Spearman
+    forca = "forte" if abs(r) >= 0.7 else "moderada" if abs(r) >= 0.4 else "fraca"  # força: forte, moderada ou fraca
+    base.update({"pearson": num(r, 3), "p": num(p, 6), "spearman": num(rho, 3), "spearmanP": num(p_rho, 6),  # guarda os números
+                 "interpretacao": f"Correlação {forca} {'positiva' if r > 0 else 'negativa'} entre a quantidade de serviços e o faturamento."})  # e a frase explicando
+    return base                                                                     # devolve o resultado
+
+
+# ---------------------------------------------------------------------- função principal
+def calcular(res: ResultadoTransformacao, linhas_recebidas: int) -> dict:           # calcular: função principal; recebe a limpeza e devolve o JSON
+    df = res.tratado                                                                # tabela dos clientes tratados
+    if df.empty:                                                                    # sem clientes
+        raise ValueError("Não há clientes válidos para calcular estatísticas.")     # erro explicando
+    fat = df["faturamento_anual"]                                                   # coluna de faturamento
+    r = _resumo_serie(fat)                                                          # medidas gerais (média, mediana...)
+
+    por_segmento = _agrupar(df, "segmento", "segmento")                             # por segmento
+    por_nivel = _agrupar(df.sort_values("nivel_cliente"), "nivel_cliente", "nivel")  # por nível
+    por_nivel.sort(key=lambda x: x["nivel"])  # A -> C
+    por_consultor = _agrupar(df, "consultor", "consultor")                          # por consultor
+    por_servico = _por_servico(df)                                                  # por serviço
+    por_mes = _por_mes(df)                                                          # por mês
+    correlacao = _correlacao(df)                                                    # correlação
+
+    resumo = {                                                                      # resumo geral (cartões do dashboard)
+        "totalClientes": r["clientes"], "faturamentoTotal": r["total"], "media": r["media"], "mediana": r["mediana"],  # total de clientes, faturamento, média e mediana
+        "desvioPadrao": r["desvioPadrao"], "minimo": r["minimo"], "maximo": r["maximo"], "q1": r["q1"], "q3": r["q3"],  # desvio padrão, mínimo, máximo e quartis
+        "segmentoMaisFrequente": moda(df["segmento"]), "nivelMaisFrequente": moda(df["nivel_cliente"]),  # segmento e nível mais frequentes (moda)
+        "servicoMaisContratado": moda(df["servicos"].explode()),                    # serviço mais contratado (moda)
+        "mediaServicosPorCliente": num(df["qtd_servicos"].mean()),                  # média de serviços por cliente
+        "coeficienteVariacao": num(fat.std(ddof=1) / fat.mean(), 3) if len(fat) > 1 and fat.mean() else None,  # coeficiente de variação (desvio / média)
+        "consultores": int(df["consultor"].nunique()),                              # número de consultores
+    }                                                                               # fim do resumo
+    top = df.sort_values("faturamento_anual", ascending=False).head(5)              # os 5 maiores clientes
+
+    return {                                                                        # devolve o dicionário que vira JSON no banco
+        "geradoEm": datetime.now(timezone.utc).isoformat(timespec="seconds"),       # quando foi gerado
+        "resumo": resumo,                                                           # resumo geral
+        "porSegmento": por_segmento,                                                # clientes por segmento
+        "porNivel": por_nivel,                                                      # clientes por nível
+        "porConsultor": por_consultor,                                              # faturamento por consultor
+        "porServico": por_servico,                                                  # serviços
+        "porMes": por_mes,                                                          # contratações por mês
+        "correlacao": correlacao,                                                   # correlação
+        "topClientes": [{"codigo": x.codigo_cliente, "nome": x.nome_cliente, "segmento": x.segmento,  # 5 maiores clientes
+                         "nivel": x.nivel_cliente, "faturamento": num(x.faturamento_anual)} for x in top.itertuples()],  # (continuação)
+        "qualidade": {                                                              # relatório de qualidade da planilha
+            "linhasRecebidas": int(linhas_recebidas),                               # linhas recebidas
+            "linhasValidas": int(len(df)),                                          # linhas válidas
+            "linhasInvalidas": int(linhas_recebidas - len(df)),                     # linhas inválidas
+            "correcoesSegmento": res.padronizacoes["segmento"],                     # correções de segmento
+            "correcoesConsultor": res.padronizacoes["consultor"],                   # correções de consultor
+            "correcoesNivel": res.padronizacoes["nivel_cliente"],                   # correções de nível
+            "segmentosOriginais": res.segmentos_originais,                          # segmentos que foram corrigidos
+            "avisos": res.avisos,                                                   # avisos
+        },                                                                          # fim da qualidade
+        "insights": gerar_insights(resumo, por_segmento, por_nivel, por_consultor, por_servico, por_mes, correlacao),  # frases de insights
+    }                                                                               # fim do dicionário
+----- FIM DE analise.py -----
+
+
+####################################################################################################
+# PASSO 5.6 - CRIAR O ARQUIVO: insights.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: T (Transformar) - transforma os números em frases em português.
+O QUE USA ..: listas e if (nenhum pacote extra).
+COMO FUNCIONA:
+  - gerar_insights: cada "if" verifica uma condição nos números e, se for verdadeira,
+    escreve uma frase pronta (ex.: "Os 13 clientes nível A representam 74,0% do faturamento").
+  - as frases vão dentro do JSON do dashboard, gravado no Azure pelo banco.py.
+
+----- CÓDIGO (insights.py) -----
+"""Insights: transforma os números da análise em frases em português."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+
+def brl(valor) -> str:                                                              # brl: formata como dinheiro brasileiro
+    if valor is None:                                                               # sem valor
+        return "—"                                                                  # devolve um traço
+    s = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")       # troca vírgula e ponto: 1,234.50 vira 1.234,50
+    return f"R$ {s}"                                                                # devolve com "R$"
+
+
+def _virg(x) -> str:                                                                # _virg: troca o ponto decimal por vírgula
+    return str(x).replace(".", ",")                                                 # 25.0 vira "25,0"
+
+
+def gerar_insights(resumo, por_segmento, por_nivel, por_consultor, por_servico, por_mes, correlacao) -> list[str]:  # gerar_insights: monta frases em português com os achados
+    ins: list[str] = []                                                             # lista de frases
+    top = por_segmento[0]                                                           # segmento com mais clientes
+    ins.append(f"O segmento {top['segmento']} concentra a maior carteira: {top['clientes']} clientes ({_virg(top['percentual'])}%).")  # frase do segmento
+
+    if resumo["media"] and resumo["mediana"] and resumo["media"] > resumo["mediana"] * 1.1:  # média bem maior que a mediana?
+        ins.append(f"A média de faturamento ({brl(resumo['media'])}) é maior que a mediana ({brl(resumo['mediana'])}): "  # frase explicando
+                   "poucos clientes muito grandes puxam a média para cima, então a mediana descreve melhor o cliente típico.")  # (continuação) poucos clientes grandes puxam a média
+    elif resumo["media"] and resumo["mediana"]:                                     # senão, se são parecidas
+        ins.append(f"Média ({brl(resumo['media'])}) e mediana ({brl(resumo['mediana'])}) são próximas: a carteira é equilibrada.")  # frase de equilíbrio
+
+    a = next((n for n in por_nivel if n["nivel"] == "A"), None)                     # procura o nível A
+    if a:                                                                           # se existe
+        ins.append(f"Os {a['clientes']} clientes nível A representam {_virg(a['percentualFaturamento'])}% do faturamento total, "  # frase do nível A
+                   f"com apenas {_virg(a['percentual'])}% dos clientes.")           # (continuação)
+
+    maior = max(por_consultor, key=lambda c: c["faturamentoTotal"])                 # consultor com maior faturamento
+    ins.append(f"{maior['consultor']} é o consultor com maior faturamento sob gestão ({brl(maior['faturamentoTotal'])}, {maior['clientes']} clientes).")  # frase do consultor
+
+    if por_servico:                                                                 # se há serviços
+        s = por_servico[0]                                                          # o mais contratado
+        ins.append(f"{s['servico']} é o serviço mais contratado: presente em {s['contratos']} clientes ({_virg(s['percentual'])}%).")  # frase do serviço
+
+    if por_mes:                                                                     # se há meses
+        pico = max(e["clientes"] for e in por_mes)                                  # maior número de contratações em um mês
+        meses = [f"{e['mes'][5:]}/{e['mes'][:4]}" for e in por_mes if e["clientes"] == pico]  # meses em que isso aconteceu
+        if len(meses) <= 3:                                                         # poucos meses de pico
+            ins.append(f"O pico de contratações foi em {', '.join(meses)} ({pico} por mês).")  # frase com os meses
+        else:                                                                       # muitos meses de pico
+            ins.append(f"As contratações ficaram distribuídas ao longo do tempo: no máximo {pico} por mês, repetido em {len(meses)} meses.")  # frase de distribuição
+
+    if correlacao["pearson"] is not None:                                           # se a correlação foi calculada
+        ins.append(correlacao["interpretacao"].rstrip(".") + f" (r de Pearson = {_virg(correlacao['pearson'])}).")  # frase da correlação
+    return ins                                                                      # devolve as frases
+----- FIM DE insights.py -----
+
+
+####################################################################################################
+# PASSO 5.7 - CRIAR O ARQUIVO: banco.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: L (Carregar) - ÚNICO arquivo que conversa com o Azure. Grava clientes, contratos e o JSON do dashboard; marca o lote como PROCESSADO ou ERRO.
+O QUE USA ..: SQLAlchemy (engine, text, transação), psycopg (driver), json, pandas.
+COMO FUNCIONA:
+  - criar_engine: abre a conexão com o Azure.
+  - criar_lote: o PYTHON cria o lote em upload_lote (status PROCESSANDO). O Java não grava nada do upload.
+  - gravar_resultado: usa UMA transação (engine.begin): ou grava tudo ou nada. Apaga o resultado
+    antigo do lote, insere cada cliente, cada contrato (um por serviço) e o JSON em estatistica_lote.
+  - marcar_erro: grava o status ERRO com a mensagem, para a tela mostrar o motivo.
+  - Os comandos SQL usam parâmetros (:l, :nome): evitam erro e ataque (SQL injection).
+
+----- CÓDIGO (banco.py) -----
+"""Banco: GRAVA no PostgreSQL (Azure) os clientes, contratos e o JSON do dashboard. As linhas chegam do backend."""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import json                                                                         # json: transforma dicionário em texto JSON
+import logging                                                                      # logging: escreve mensagens no terminal
+from datetime import datetime, timezone                                             # datetime e timezone: data e hora em UTC
+
+import pandas as pd                                                                 # pandas: tabelas de dados (DataFrame)
+from sqlalchemy import create_engine, text                                          # SQLAlchemy: create_engine abre a conexão; text escreve SQL
+from sqlalchemy.engine import Connection, Engine                                    # tipos Connection e Engine (só para indicar o tipo)
+
+from config import database_url                                                    # config: pega o endereço do banco do .env
+
+log = logging.getLogger("analytics")                                                # logger do programa
+
+
+def criar_engine() -> Engine:                                                       # criar_engine: abre a "porta" de conexão com o Azure
+    return create_engine(database_url(), pool_pre_ping=True)                        # pool_pre_ping testa a conexão antes de usar
+
+
+def agora_utc() -> datetime:                                                        # agora_utc: hora atual em UTC
+    """O Spring Boot grava TIMESTAMP em UTC (sem fuso); fazemos o mesmo."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)                          # o Spring grava em UTC sem fuso; fazemos igual
+
+
+# ------------------------------------------------------------------- gravação
+def criar_lote(engine: Engine, arquivo_nome: str, recebidas: int,  # criar_lote: o PYTHON cria o lote (o Java não grava nada do upload)
+               invalidas: int, validas: int, com_aviso: int) -> int:                 # (continuação) contagens que o Java informou
+    """Cria a linha em upload_lote com status PROCESSANDO e devolve o id novo."""
+    with engine.begin() as conn:                                                    # abre uma transação (confirma ao sair do bloco)
+        return conn.execute(                                                        # executa o INSERT e já pede o id gerado
+            text("INSERT INTO upload_lote (arquivo_nome, enviado_em, status, total_linhas, "  # insere o lote...
+                 "linhas_validas, linhas_invalidas, linhas_com_aviso, mensagem) "   # (continuação) contagens
+                 "VALUES (:a, :e, 'PROCESSANDO', :t, :v, :i, :c, 'ETL em andamento...') RETURNING id"),  # status PROCESSANDO
+            {"a": arquivo_nome[:255], "e": agora_utc(), "t": recebidas,  # valores: nome, hora, total
+             "v": validas, "i": invalidas, "c": com_aviso}).scalar_one()            # válidas, inválidas, avisos; devolve o id
+
+
+def marcar_erro(engine: Engine, lote_id: int, mensagem: str) -> None:               # marcar_erro: grava ERRO no lote
+    with engine.begin() as conn:                                                    # abre uma transação
+        conn.execute(text("UPDATE upload_lote SET status = 'ERRO', mensagem = :m WHERE id = :id"),  # SQL: status ERRO e a mensagem
+                     {"id": lote_id, "m": mensagem[:480]})                          # mensagem limitada a 480 caracteres
+
+
+# ------------------------------------------------------------------------ carga
+def gravar_resultado(engine: Engine, lote_id: int, tratado: pd.DataFrame, payload: dict, rejeitadas_etl: int) -> None:  # gravar_resultado: grava clientes, contratos e o JSON
+    """Grava tudo em uma única transação: ou o lote inteiro é processado, ou nada muda."""
+    with engine.begin() as conn:                                                    # uma transação só: ou grava tudo ou nada
+        # reprocessar o mesmo lote substitui o resultado anterior
+        conn.execute(text("DELETE FROM cliente WHERE lote_id = :l"), {"l": lote_id})   # contratos saem em cascata
+        conn.execute(text("DELETE FROM estatistica_lote WHERE lote_id = :l"), {"l": lote_id})  # apaga as estatísticas antigas
+
+        consultores: dict[str, int] = {}                                            # cache: nome do consultor -> id
+        segmentos: dict[str, int] = {}                                              # cache: nome do segmento -> id
+        servicos: dict[str, int] = {}                                               # cache: nome do serviço -> id
+
+        def id_de(tabela: str, nome: str, cache: dict[str, int]) -> int:            # id_de: acha ou cria um consultor/segmento/serviço e devolve o id
+            if nome not in cache:                                                   # se ainda não está no cache
+                conn.execute(text(f"INSERT INTO {tabela} (nome) VALUES (:n) ON CONFLICT (nome) DO NOTHING"), {"n": nome})  # insere (ignora se já existe)
+                cache[nome] = conn.execute(text(f"SELECT id FROM {tabela} WHERE nome = :n"), {"n": nome}).scalar_one()  # busca o id e guarda no cache
+            return cache[nome]                                                      # devolve o id
+
+        for r in tratado.itertuples(index=False):                                   # para cada cliente tratado
+            cliente_id = conn.execute(text("""
+                INSERT INTO cliente (lote_id, codigo_cti, nome, consultor_id, segmento_id, nivel, faturamento_anual, cidade, uf)
+                VALUES (:lote, :codigo, :nome, :consultor, :segmento, :nivel, :fat, :cidade, :uf)
+                RETURNING id
+            """), {
+                "lote": lote_id, "codigo": r.codigo_cliente[:60], "nome": r.nome_cliente[:255],  # código e nome (cortados no tamanho da coluna)
+                "consultor": id_de("consultor", r.consultor[:120], consultores),    # consultor vira id
+                "segmento": id_de("segmento", r.segmento[:40], segmentos),               # segmento vira id
+                "nivel": r.nivel_cliente, "fat": round(float(r.faturamento_anual), 2),  # nível e faturamento com 2 casas
+                "cidade": r.cidade[:120] if isinstance(r.cidade, str) else None,    # cidade (ou nulo)
+                "uf": r.uf if isinstance(r.uf, str) else None,                      # UF (ou nula)
+            }).scalar_one()                                                         # fim do INSERT; devolve o id do cliente
+            for nome_servico in r.servicos:                                         # para cada serviço do cliente
+                conn.execute(text("""
+                    INSERT INTO contrato (cliente_id, servico_id, data_contratacao) VALUES (:c, :s, :d)
+                """), {"c": cliente_id, "s": id_de("servico", nome_servico[:120], servicos),
+                       "d": r.data_contratacao.date()})                             # data da contratação
+
+        conn.execute(text("INSERT INTO estatistica_lote (lote_id, gerado_em, resultado) VALUES (:l, :g, :r)"),  # grava o JSON com média, mediana e gráficos
+                     {"l": lote_id, "g": agora_utc(), "r": json.dumps(payload, ensure_ascii=False)})  # o JSON vai como texto
+
+        mensagem = f"ETL concluído: {len(tratado)} clientes tratados"               # monta a mensagem final
+        if rejeitadas_etl:                                                          # se o ETL recusou alguma linha
+            mensagem += f", {rejeitadas_etl} linhas recusadas na limpeza"           # acrescenta quantas
+        conn.execute(text("UPDATE upload_lote SET status = 'PROCESSADO', mensagem = :m WHERE id = :id"),  # marca o lote como PROCESSADO
+                     {"id": lote_id, "m": mensagem + "."})                          # com a mensagem de resumo
+    log.info("Lote %s gravado: %s clientes, %s consultores, %s segmentos, %s serviços",           # escreve no terminal o resumo
+             lote_id, len(tratado), len(consultores), len(segmentos), len(servicos))                # (continuação) contagens
+----- FIM DE banco.py -----
+
+
+####################################################################################################
+# PASSO 5.8 - CRIAR O ARQUIVO: testar_conexao.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: Confere se o Python consegue conectar no PostgreSQL do Azure.
+O QUE USA ..: SQLAlchemy (text), banco.criar_engine.
+COMO FUNCIONA:
+  Roda SELECT version(); se conectar mostra "Conectou!"; se falhar, mostra uma dica (firewall ou senha).
+
+----- CÓDIGO (testar_conexao.py) -----
+"""Testa a conexão com o PostgreSQL do Azure: python testar_conexao.py"""
+from sqlalchemy import text  # import: text escreve SQL
+
+from banco import criar_engine  # import: abre a conexão (usa o .env)
+
+try:  # tenta conectar
+    with criar_engine().connect() as conexao:  # abre a conexão com o banco
+        versao = conexao.execute(text("SELECT version()")).scalar()  # pergunta a versão do PostgreSQL
+        print("Conectou!", versao)  # deu certo: mostra a versão
+        try:  # tenta contar os lotes
+            lotes = conexao.execute(text("SELECT COUNT(*) FROM upload_lote")).scalar()  # conta quantos lotes existem
+            print("Lotes no banco:", lotes)  # mostra quantos lotes já foram enviados
+        except Exception:  # a tabela ainda não existe
+            print("As tabelas ainda não foram criadas. Rode o backend uma vez (mvn spring-boot:run) e teste de novo.")  # explica o que fazer
+except Exception as erro:  # se não conectou:
+    print("Não conectou. Confira o .env e o firewall do Azure (seu IP precisa estar liberado).")  # dica de onde olhar
+    print("Detalhe:", str(erro).splitlines()[0])  # mostra só a primeira linha do erro
+----- FIM DE testar_conexao.py -----
+
+>>> PARE E FAÇA: 1) copie .env.example para .env (Windows: copy .env.example .env | Linux/Mac: cp .env.example .env);
+    2) preencha DB_HOST (termina com .postgres.database.azure.com), DB_USER e DB_PASSWORD, mantendo DB_SSLMODE=require;
+    3) libere o IP do seu computador no firewall do servidor no portal do Azure;
+    4) rode:  python testar_conexao.py   -> deve aparecer "Conectou!".
+    Se aparecer "As tabelas ainda não foram criadas", rode o backend uma vez e teste de novo.
+
+
+
+####################################################################################################
+# PASSO 5.9 - CRIAR O ARQUIVO: main.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: Guarda o processar_lote: a ordem do trabalho (limpar, calcular, gravar). É chamado pela API.
+O QUE USA ..: logging, pandas e os outros arquivos (limpeza, analise, banco).
+COMO FUNCIONA:
+  processar_lote: cria o lote (banco.criar_lote), tratar() -> calcular() -> banco.gravar_resultado().
+  Se der erro, marca o lote como ERRO. É chamado pelo api.py (próximo arquivo).
+
+----- CÓDIGO (main.py) -----
+"""Entrada do trabalho do Python: processar_lote (chamado pela API em api.py).
+
+O Spring só valida e envia as linhas válidas; o PYTHON cria o lote, limpa (limpeza.py), calculadas (analise.py)
+e gravadas no Azure (banco.py).
+"""
+from __future__ import annotations                                                  # recurso do Python para tipos mais flexíveis
+
+import logging                                                                      # logging: escreve mensagens no terminal
+
+import pandas as pd                                                                 # pandas: tabelas de dados
+
+from analise import calcular                                                        # calcular: gera os indicadores e as frases (analise.py)
+from limpeza import tratar                                                          # tratar: limpa e padroniza os dados (limpeza.py)
+
+log = logging.getLogger("analytics")                                                # logger do programa
+
+
+def processar_lote(engine, arquivo_nome: str, linhas: list[dict],  # processar_lote: cria o lote, trata, calcula e GRAVA tudo no Azure
+                   recebidas: int, invalidas: int, com_aviso: int) -> int:          # (continuação) contagens que o backend informou
+    import banco                                                                    # banco.py: funções que gravam no banco Azure
+    if not linhas:                                                                  # o backend não mandou nenhuma linha?
+        raise ValueError("o backend não enviou linhas válidas")                     # erro explicando
+    lote_id = banco.criar_lote(engine, arquivo_nome, recebidas, invalidas, len(linhas), com_aviso)  # CRIA o lote no banco (status PROCESSANDO)
+    try:                                                                            # tenta processar
+        bruto = pd.DataFrame(linhas).astype(object)                                 # lista de dicionários vira tabela do pandas
+        res = tratar(bruto)                                                         # limpa os dados
+        payload = calcular(res, recebidas)                                          # calcula média, mediana, agrupamentos e frases
+        banco.gravar_resultado(engine, lote_id, res.tratado, payload, len(res.rejeitadas))  # GRAVA clientes, contratos e o JSON no Azure
+        log.info("Lote %s processado.", lote_id)                                    # registra no terminal
+        return lote_id                                                              # deu certo: devolve o id do lote
+    except Exception as e:  # noqa: BLE001 - qualquer falha deve aparecer na tela do usuário
+        log.exception("Falha no lote %s", lote_id)                                  # escreve o erro completo no terminal
+        banco.marcar_erro(engine, lote_id, f"Falha no ETL: {e}")                    # grava ERRO no lote para a tela mostrar
+        raise                                                                       # repassa o erro para a API responder 500
+----- FIM DE main.py -----
+
+####################################################################################################
+# PASSO 5.10 - CRIAR O ARQUIVO: api.py
+####################################################################################################
+PASTA ......: analytics-python/
+PARA QUE SERVE: ENTRADA do projeto real. Transforma o Python em uma API (FastAPI): o Spring faz POST /etl com o JSON do lote e o Python limpa, calcula e GRAVA no Azure.
+O QUE USA ..: FastAPI (cria a API), pydantic (descreve o formato do JSON), uvicorn (mantém ligada), main.processar_lote.
+COMO FUNCIONA:
+  - GET /saude: confere se a API está de pé (abra http://localhost:8000/saude no navegador).
+  - POST /testar: teste SEM banco. Recebe só a lista de clientes (amostras/clientes.json), limpa, calcula
+    e devolve os números e as frases. Não grava nada no Azure.
+  - POST /etl: recebe {arquivoNome, recebidas, invalidas, comAviso, linhas}, chama processar_lote
+    (que CRIA o lote e grava tudo) e responde 200 com {ok: true} (o Python não devolve dados, só grava no banco) ou erro.
+  - ETL_API_KEY (no .env): se preenchida, o Spring precisa enviar a mesma chave no cabeçalho X-ETL-Key
+    (sem a chave certa a resposta é 401). Vazia = sem chave, só para estudar no seu computador.
+  - http://localhost:8000/docs mostra uma tela para testar o POST /etl sem o Spring.
+  - Como ligar:  uvicorn api:app --port 8000   (deixe o terminal aberto)
+
+----- CÓDIGO (api.py) -----
+# ============================================================================
+# api.py — a "porta de entrada" do Python para o DEPLOY: transforma o ETL em uma API (FastAPI).
+# O Spring chama POST /etl enviando as linhas válidas; o Python CRIA o lote, limpa, calcula e GRAVA tudo no Azure.
+# Como ligar:  uvicorn api:app --port 8000        (documentação automática em http://localhost:8000/docs)
+# ============================================================================
+import logging                                                                      # logging: escreve mensagens no terminal
+import os                                                                           # os: lê variáveis de ambiente (ETL_API_KEY)
+from typing import Any                                                              # Any: "qualquer tipo" (valores das linhas)
+
+from fastapi import FastAPI, Header, HTTPException                                  # FastAPI: cria a API; Header: lê cabeçalhos; HTTPException: devolve erro HTTP
+import pandas as pd                                                                 # pandas: tabelas de dados
+from pydantic import BaseModel                                                      # BaseModel: descreve o formato do JSON que o Spring envia
+
+import config                                                                       # config.py: carrega o .env (senha do banco, ETL_API_KEY)
+from analise import calcular                                                        # calcular: indicadores e frases (analise.py)
+from limpeza import tratar                                                          # tratar: limpeza (limpeza.py)
+from main import processar_lote                                                     # a MESMA função que o modo de estudo usa: trata, calcula e grava no Azure
+
+log = logging.getLogger("analytics")                                                # logger desta API
+app = FastAPI(title="CTI Insights — ETL em Python")                                 # app: a aplicação web
+_engine = None                                                                      # conexão com o Azure (criada na primeira vez que for usada)
+
+
+class Pedido(BaseModel):                                                            # Pedido: o formato do JSON enviado pelo Spring
+    arquivoNome: str = "planilha"                                                   # nome do arquivo enviado
+    recebidas: int                                                                  # total de linhas da planilha (boas + ruins), para o relatório de qualidade
+    invalidas: int = 0                                                              # quantas linhas tinham erro (o Spring não as enviou)
+    comAviso: int = 0                                                               # quantas linhas válidas têm aviso
+    linhas: list[dict[str, Any]]                                                    # só as linhas válidas
+
+
+def _engine_azure():                                                                # devolve a conexão com o Azure (cria só uma vez)
+    global _engine                                                                  # usa a variável de fora da função
+    if _engine is None:                                                             # ainda não existe?
+        import banco                                                                # banco.py: único arquivo que fala com o Azure
+        _engine = banco.criar_engine()                                              # abre a conexão
+    return _engine                                                                  # devolve
+
+
+@app.get("/saude")                                                                  # GET /saude: o Spring (ou você) confere se a API está de pé
+def saude() -> dict:                                                                # função chamada nesse endereço
+    return {"status": "ok"}                                                         # resposta simples
+
+
+@app.post("/etl")                                                                   # POST /etl: recebe o lote, processa e grava no Azure
+def etl(pedido: Pedido, x_etl_key: str | None = Header(default=None)) -> dict:      # x_etl_key: cabeçalho X-ETL-Key
+    chave = os.getenv("ETL_API_KEY", "").strip()                                    # chave combinada com o Spring (vazia = sem chave, só para estudo)
+    if chave and x_etl_key != chave:                                                # há chave configurada e a enviada não confere?
+        raise HTTPException(status_code=401, detail="Chave do ETL inválida.")       # recusa: 401 não autorizado
+    if not pedido.linhas:                                                           # veio vazio?
+        raise HTTPException(status_code=422, detail="Nenhuma linha válida foi enviada.")  # 422: dados inválidos
+    try:                                                                            # tenta processar
+        processar_lote(_engine_azure(), pedido.arquivoNome, pedido.linhas,          # cria o lote, trata, calcula e grava no Azure
+                                 pedido.recebidas, pedido.invalidas, pedido.comAviso)  # (continuação) contagens
+    except Exception as e:  # noqa: BLE001 - o motivo vai para a resposta
+        raise HTTPException(status_code=500, detail=f"Falha no ETL: {e}")           # 500: erro no servidor (o lote fica com status ERRO)
+    return {"ok": True}                                                             # 200: deu certo; o Python não devolve dados, só gravou no banco
+
+
+@app.post("/testar")                                                                # POST /testar: teste sem banco (não grava nada no Azure)
+def testar(linhas: list[dict[str, Any]]) -> dict:                                   # recebe só a lista de clientes (como amostras/clientes.json)
+    res = tratar(pd.DataFrame(linhas).astype(object))                               # limpa
+    return calcular(res, len(linhas))                                               # calcula e devolve os números e as frases
+----- FIM DE api.py -----
+
+>>> PARE E FAÇA: pip install -r requirements.txt (o fastapi e o uvicorn entram agora) e ligue a API:  uvicorn api:app --port 8000
+    Abra http://localhost:8000/saude e confira  {"status":"ok"}.
+
+
+
+####################################################################################################
+# PASSO 5.11 - CRIAR O ARQUIVO: amostras/clientes.json
+####################################################################################################
+PASTA ......: analytics-python/amostras/
+PARA QUE SERVE: JSON de teste no formato da aula 10 (camelCase). Serve para testar o Python sozinho (POST /testar), sem backend e sem banco.
+O QUE USA ..: (nenhum - é só dado).
+COMO FUNCIONA:
+  Dois clientes. "ana souza" e "carlos lima" devem virar "Ana Souza" e "Carlos Lima"; "IND." e
+  "Comercio" devem virar "Indústria" e "Comércio".
+
+----- CÓDIGO (amostras/clientes.json) -----
+[
+  {
+    "codigoCliente": "CTI001",
+    "nomeCliente": "Metalúrgica Horizonte",
+    "consultor": "Ana Souza",
+    "segmento": "IND.",
+    "nivelCliente": "A",
+    "faturamentoAnual": 1850000,
+    "servicosContratados": "Internet Dedicada;Firewall",
+    "dataContratacao": "2025-01-15",
+    "cidade": "Campinas",
+    "uf": "SP"
+  },
+  {
+    "codigoCliente": "CTI002",
+    "nomeCliente": "Mercado Central",
+    "consultor": "carlos lima",
+    "segmento": "Comercio",
+    "nivelCliente": "B",
+    "faturamentoAnual": 420000,
+    "servicosContratados": "Backup;Firewall",
+    "dataContratacao": "2025-01-30",
+    "cidade": "Hortolândia",
+    "uf": "SP"
+  }
+]
+----- FIM DE amostras/clientes.json -----
+
+>>> PARE E FAÇA: tudo criado. Vá ao PASSO 8 e rode o primeiro teste: /testar com amostras/clientes.json.
+
+
+
+====================================================================================================
+PASSO 6 - O ARQUIVO JAVA QUE FAZ A CONEXÃO COM O PYTHON (COMPLETO, COM COMENTÁRIO NA FRENTE)
+====================================================================================================
+O QUE É
+  O Java NÃO grava os dados da planilha e NÃO tem model de upload. Ele só VALIDA e ENCAMINHA tudo ao Python.
+  Quem cria o lote, limpa, calcula e GRAVA no banco é o Python. Este arquivo Java é a "ponte":
+  faz um POST HTTP com as linhas válidas (POST /etl). O dashboard fica para depois.
+
+ONDE FICA
+  Pasta:   backend/src/main/java/com/cti/provedor/service/
+  Arquivo: PythonEtlService.java        (fica ao lado do ClienteValidacaoService)
+
+RESPONSABILIDADE (só uma)
+  Falar com a API do Python (POST /etl) e avisar com um erro claro se algo falhar. Não calcula nada e não grava nada.
+
+O QUE ELE USA (nada para instalar: já vem no Java 21 e no Spring)
+  java.net.http.HttpClient / HttpRequest / HttpResponse ... fazem o POST (já vem no Java)
+  ObjectMapper (Jackson) .................................... monta o JSON (já vem no Spring)
+  @Component ................................................ o Spring cria e entrega a classe pronta
+  ApiException .............................................. devolve o erro com código HTTP para a tela
+
+POR QUE NÃO PRECISA DE MODEL
+  Tudo vai como JSON: as linhas válidas seguem em um Map. O Python não devolve dados, só responde {ok: true}.
+  Por isso você NÃO cria UploadLote, UploadLinha, StatusLote nem repository de lote.
+  O Java só tem model do login (Usuario).
+
+COMO O CAMINHO FUNCIONA
+  1) UploadService valida de novo cada linha. As com erro NÃO são enviadas nem gravadas: voltam na resposta ("rejeitadas").
+  2) UploadService chama python.enviar(...) só com as linhas válidas.
+  3) enviar() monta o JSON {arquivoNome, recebidas, invalidas, comAviso, linhas} e faz o POST em /etl.
+  4) O Python cria o lote, limpa, calcula (média, mediana, desvio...) e grava no banco. Responde só 200 {ok: true}.
+  5) O resultado fica no banco (upload_lote e estatistica_lote). O dashboard (ler do banco e gerar os gráficos no front-end) vem depois.
+  6) Se não for 200 (ou o Python estiver desligado), o Java devolve o erro e a tela mostra o motivo.
+
+CONFIGURAÇÃO (arquivo backend/.env, lido pelo application.properties)
+  ETL_URL=http://localhost:8000/etl     endereço do Python (no deploy: https://seu-python.../etl)
+  ETL_KEY=segredo                       mesma chave do ETL_API_KEY do analytics-python/.env
+                                        (vazio nos dois = sem chave, só para estudar no seu computador)
+
+JSON ENVIADO
+  {"arquivoNome": "dados.xlsx", "recebidas": 38, "invalidas": 6, "comAviso": 3,
+   "linhas": [ {"codigo_cliente": "CTI-001", "nome_cliente": "...", ...}, ... ]}
+  - arquivoNome  nome do arquivo
+  - recebidas .. total de linhas da planilha (boas + ruins), para o relatório de qualidade
+  - invalidas .. quantas linhas tinham erro (só a contagem; elas não são enviadas)
+  - comAviso ... quantas válidas têm aviso
+  - linhas ..... só as 32 válidas (as 6 inválidas não são gravadas nem enviadas)
+
+ERROS QUE ESTE ARQUIVO TRATA
+  Python desligado ........ erro 503 na tela: "Não foi possível falar com o serviço Python ..."
+  Python respondeu 401 .... erro 502: "O serviço Python respondeu 401" (ETL_KEY diferente de ETL_API_KEY)
+  Python respondeu 500 .... erro 502 com o texto devolvido pelo Python (o lote fica com status ERRO no banco)
+
+ATENÇÃO (tabelas): upload_linha não existe mais e cliente agora usa a tabela segmento.
+No DBeaver rode: DROP TABLE IF EXISTS upload_linha, contrato, cliente CASCADE;  (o Spring recria ao ligar).
+O lote não tem dono: se a sua tabela upload_lote tem a coluna usuario_id, ela fica vazia e não atrapalha.
+
+CÓDIGO COMPLETO (copie tudo, o comentário depois do // explica a linha)
+----------------------------------------------------------------------------------------------------
+package com.cti.provedor.service;                        // pacote desta classe
+
+import com.cti.provedor.config.AppProperties;                                   // import: configurações (endereço e chave do Python)
+import com.cti.provedor.exception.ApiException;                                 // import: nosso erro com código HTTP
+import com.fasterxml.jackson.databind.ObjectMapper;                                 // import: ObjectMapper lê e escreve JSON
+import java.io.IOException;                                                         // import: erro de entrada/saída
+import java.net.URI;                                                            // import: URI = endereço da API do Python
+import java.net.http.HttpClient;                                                // import: HttpClient = cliente HTTP do próprio Java
+import java.net.http.HttpRequest;                                               // import: HttpRequest = o pedido
+import java.net.http.HttpResponse;                                              // import: HttpResponse = a resposta
+import java.nio.charset.StandardCharsets;                                           // import: UTF-8 para acentos
+import java.time.Duration;                                                       // import: Duration = tempo máximo de espera
+import java.util.LinkedHashMap;                                                     // import: mapa que mantém a ordem dos campos
+import java.util.List;                                                              // import: tipo lista
+import java.util.Map;                                                               // import: tipo mapa (chave -> valor)
+import org.slf4j.Logger;                                                            // import: Logger escreve no terminal
+import org.slf4j.LoggerFactory;                                                     // import: fábrica de Logger
+import org.springframework.http.HttpStatus;                                         // import: códigos HTTP
+import org.springframework.stereotype.Component;                                    // import: marca como componente do Spring
+
+/**
+ * A PONTE entre o Java e o Python. O Java só valida e ENCAMINHA: o Python cria o lote, limpa, calcula e GRAVA no banco.
+ * Sem model, sem repository: o Java só envia um JSON; o Python grava no banco.
+ */
+@Component                                                                          // componente do Spring
+public class PythonEtlService {                                                     // CHAMA A API DO PYTHON
+    private static final Logger log = LoggerFactory.getLogger(PythonEtlService.class);    // logger desta classe
+
+    private final String url;                                                       // endereço do POST /etl (ETL_URL)
+    private final String chave;                                                     // chave combinada com o Python (ETL_KEY; vazia = sem chave)
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();  // cliente HTTP (espera até 10 s para conectar)
+    private final ObjectMapper json;                                                // lê e escreve JSON
+
+    public PythonEtlService(AppProperties props, ObjectMapper json) {               // construtor: o Spring entrega as peças
+        this.url = props.etl() == null || props.etl().url() == null || props.etl().url().isBlank()  // endereço não configurado?
+                ? "http://localhost:8000/etl" : props.etl().url().trim();           // usa o padrão; senão o configurado
+        this.chave = props.etl() == null || props.etl().key() == null ? "" : props.etl().key().trim();  // lê a chave (pode ser vazia)
+        this.json = json;                                                           // guarda o leitor de JSON
+    }                                                                               // fecha o bloco
+
+    /** Envia as linhas válidas. O Python grava tudo no banco e só responde {ok: true}. */
+    public void enviar(String arquivoNome, int recebidas, int invalidas, int comAviso,  // enviar: manda os dados ao Python
+                           List<Map<String, Object>> linhas) {                      // (continuação) as linhas válidas
+        Map<String, Object> pedido = new LinkedHashMap<>();                         // o pedido completo que vai ao Python
+        pedido.put("arquivoNome", arquivoNome);                                     // nome do arquivo
+        pedido.put("recebidas", recebidas);                                         // total de linhas da planilha (boas + ruins)
+        pedido.put("invalidas", invalidas);                                         // quantas tinham erro (não são enviadas)
+        pedido.put("comAviso", comAviso);                                           // quantas válidas têm aviso
+        pedido.put("linhas", linhas);                                               // as linhas válidas
+        log.info("Enviando {} linhas ao Python: POST {}", linhas.size(), url);      // escreve no terminal
+        try {                                                                       // tenta montar o JSON
+            HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(url))       // monta o pedido para a API do Python
+                    .timeout(Duration.ofMinutes(5))                                 // espera a resposta por até 5 minutos
+                    .header("Content-Type", "application/json; charset=utf-8")      // avisa que o corpo é JSON
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(pedido)));  // POST com o JSON no corpo
+            chamar(req);                                                            // envia e espera o Python gravar (ele só responde ok)
+        } catch (IOException e) {                                                   // não conseguiu montar o JSON
+            throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Erro ao montar o JSON: " + e.getMessage());  // erro 500
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+
+    private void chamar(HttpRequest.Builder req) {                              // chamar: envia o pedido e trata a resposta e os erros
+        if (!chave.isEmpty()) req.header("X-ETL-Key", chave);                       // se há chave, envia no cabeçalho
+        try {                                                                       // tenta falar com o Python
+            HttpResponse<String> resp = http.send(req.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));  // ENVIA e espera a resposta
+            if (resp.statusCode() != 200) {                                         // o Python respondeu erro?
+                throw new ApiException(HttpStatus.BAD_GATEWAY,                      // erro 502 para a tela
+                        "O serviço Python respondeu " + resp.statusCode() + ": " + resp.body());  // (continuação) mostra o motivo
+            }                                                                       // fecha o bloco
+        } catch (IOException e) {                                                   // não conseguiu falar com o Python (serviço desligado?)
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,                  // erro 503 para a tela
+                    "Não foi possível falar com o serviço Python (ele está ligado? uvicorn api:app --port 8000).");  // (continuação) dica
+        } catch (InterruptedException e) {                                          // thread interrompida
+            Thread.currentThread().interrupt();                                     // restaura o sinal de interrupção
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "A chamada ao Python foi interrompida.");  // erro 503
+        }                                                                           // fecha o bloco
+    }                                                                               // fecha o bloco
+}                                                                                   // fecha o bloco
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+PASSO 7 - COMO RODAR
+====================================================================================================
+Sempre com o (.venv) ligado quando for rodar o Python.
+
+A) MODO REAL (o caminho do projeto) - três terminais
+   Terminal 1 - API do Python (pasta analytics-python, .venv ligado):
+        uvicorn api:app --port 8000
+        Confira: http://localhost:8000/saude  ->  {"status":"ok"}
+   Terminal 2 - Backend (pasta backend):
+        mvn spring-boot:run
+   Terminal 3 - Front (pasta frontend):
+        npm run dev
+   Depois: abra http://localhost:5173, entre, escolha a planilha e clique em Liberar.
+   O backend valida e faz  POST http://localhost:8000/etl  (enviando só as linhas válidas).
+   O Python CRIA o lote, limpa, calcula e GRAVA NO AZURE (lote PROCESSADO). Confira no DBeaver.
+
+B) TESTAR A API DO PYTHON SOZINHA (sem Spring e sem banco)
+   Com a API ligada, abra http://localhost:8000/docs, clique em POST /testar > Try it out, cole o
+   conteúdo de amostras/clientes.json e clique em Execute. NÃO grava nada no Azure.
+   (O POST /etl, ao contrário, GRAVA no Azure: cria o lote e todos os dados.)
+
+
+====================================================================================================
+PASSO 8 - COMO TESTAR (E O RESULTADO ESPERADO)
+====================================================================================================
+IMPORTANTE: o Thunder Client NÃO chama o Python direto para estudar. O Python do projeto se
+testa pela tela /docs da API (POST /testar). O Thunder Client testa o SPRING,
+que por sua vez chama o Python.
+
+TESTE 1 - ambiente e conexão
+   python --version                  deve mostrar 3.11 ou mais novo
+   pip list                          deve listar pandas, SQLAlchemy, fastapi...
+   python testar_conexao.py          deve mostrar "Conectou!"
+
+TESTE 2 - JSON da aula 10 (sem banco): POST /testar
+   Com a API ligada (uvicorn api:app --port 8000), abra http://localhost:8000/docs > POST /testar >
+   Try it out, cole o conteúdo de amostras/clientes.json e clique em Execute.
+   Esperado na resposta (resumo):
+     totalClientes: 2   media: 1135000.0   mediana: 1135000.0   desvioPadrao: 1011162.7
+     segmentoMaisFrequente: Comércio   nivelMaisFrequente: A   servicoMaisContratado: Firewall
+   Nas frases (insights) e nos agrupamentos, o consultor deve aparecer "Ana Souza" (e não
+   "ana souza") e o segmento "Indústria" (e não "IND.").
+
+TESTE 3 - planilha de exemplo (fluxo real)
+   Envie a planilha de exemplo (sample-data/dados.xlsx) pelo front, com a API ligada.
+   Esperado no dashboard: 32 clientes (as 6 linhas inválidas são recusadas antes), média
+   2.261.250,00, mediana 1.470.000,00, desvio padrão 1.909.013,85.
+   Moda: segmento Comércio, nível A, serviço Internet Dedicada.
+
+TESTE 4 - a API do Python no ar
+   uvicorn api:app --port 8000   e abra http://localhost:8000/saude  ->  {"status":"ok"}
+   Com ETL_API_KEY preenchida, um POST /etl sem o cabeçalho X-ETL-Key deve responder 401.
+
+TESTE 5 - fluxo completo (front + Spring + Python + Azure) com o Thunder Client no Spring
+   1. Deixe a API do Python ligada e rode  mvn spring-boot:run  na pasta backend.
+   2. Thunder Client: POST /api/auth/login  -> copie o token.
+   3. Thunder Client: POST /api/uploads/validadas (Bearer token) com as linhas no corpo.
+   4. O Spring valida e chama o Python sozinho; o Python cria o lote e grava. Veja a mensagem no terminal da API.
+   5. GET /api/dashboard?loteId=1 (Bearer token) -> confira a média e a mediana.  [PRÓXIMA ETAPA: ainda não existe no backend]
+   6. No DBeaver/Azure, com a planilha de exemplo: 32 clientes, 4 consultores, 6 serviços, 61 contratos.
+   7. Teste de erro: com a API do Python DESLIGADA a tela mostra "Não foi possível falar com o
+      serviço Python" e nada é gravado. Ligue a API e envie de novo.
+
+CHECKLIST
+   [ ] Python 3.11+ instalado            [ ] extensão Python no VS Code
+   [ ] .venv criado e ligado             [ ] pip install -r requirements.txt
+   [ ] .env preenchido                   [ ] testar_conexao.py mostrou "Conectou!"
+   [ ] /testar com clientes.json deu 2 clientes, média 1135000
+   [ ] /saude mostrou ok                 [ ] fluxo completo com o backend
+
+
+====================================================================================================
+PASSO 9 - PROBLEMAS COMUNS
+====================================================================================================
+  ModuleNotFoundError ............ o ambiente não está ligado (falta o (.venv)) ou faltou o
+                                   pip install -r requirements.txt.
+  "python" não é reconhecido ..... Python não está no PATH; reinstale marcando "Add Python to PATH".
+  "uvicorn" não é reconhecido .... o .venv não está ligado, ou use:  python -m uvicorn api:app --port 8000
+  connection timeout ............. o IP do seu computador não está liberado no firewall do Azure.
+  password authentication failed . senha ou usuário errados no .env.
+  Erro "Não foi possível falar com o serviço Python" na tela ... a API do Python não está ligada
+                                   (ou ETL_URL está errada). Ligue com uvicorn e envie de novo.
+  Erro "O serviço Python respondeu 401" na tela ... ETL_KEY (backend) diferente de ETL_API_KEY (Python).
+  Porta 8000 ocupada ............. use outra porta (--port 8001) e ajuste ETL_URL no backend/.env.
+  Arquivo criado na pasta errada . todos os .py ficam direto em analytics-python/ (não dentro do backend).
+
+
+====================================================================================================
+PASSO 10 - PERGUNTAS FREQUENTES
+====================================================================================================
+PERGUNTA 1 - Por que o Python virou uma API (FastAPI)?
+  Para o DEPLOY. Quando cada parte vai para o seu servidor, o Spring e o Python não ficam mais
+  no mesmo computador, então o Spring não consegue "abrir o Python" como programa local. Com a
+  API, o Spring chama um endereço (POST /etl) e não importa onde o Python esteja.
+  Vantagens: cada parte é atualizada separadamente; dá para ter chave de segurança (X-ETL-Key);
+  a tela /docs permite testar. As funções de limpeza, análise, insights e banco
+  NÃO mudaram: só a porta de entrada (api.py) é nova.
+
+PERGUNTA 2 - Como os dados vão do Spring para o Python?
+    Spring (Java)                                       Python (FastAPI)
+    -------------------------------------------------   ---------------------------------------
+    1. monta o JSON com as linhas válidas
+    2. POST http://localhost:8000/etl  (JSON no corpo)  -> api.py recebe e confere a chave
+                                                        -> processar_lote: tratar, calcular, grava no Azure
+    3. espera a resposta (até 5 minutos)
+    4. lê o status:                                     <- 200 = ok (com o loteId), 401 = chave errada, 500 = falhou
+       200 = ok, outro = o Java devolve o erro para a tela
+
+PERGUNTA 3 - O que vamos guardar no banco de dados (Azure PostgreSQL)?
+  Só dados VÁLIDOS e já tratados. Por isso validamos antes (Pinia, depois Spring, depois Python).
+    upload_lote ........ cada envio de planilha: quem enviou, quando, linhas recebidas, status
+                         (PROCESSANDO, PROCESSADO ou ERRO; criado pelo Python) e a mensagem.
+    cliente ............ código, nome, segmento, nível, faturamento anual, data de contratação,
+                         cidade, UF e o consultor responsável.
+    consultor .......... nome de cada consultor (sem repetir).
+    servico ............ nome de cada serviço (sem repetir).
+    contrato ........... liga cliente e serviço (um registro por serviço contratado).
+    estatistica_lote ... o JSON pronto do dashboard (média, mediana, desvio, agrupamentos para os gráficos, insights).
+    usuario ............ login (parte de autenticação, separada do ETL).
+  Com a planilha de exemplo: 32 clientes, 4 consultores, 6 serviços, 61 contratos.
+  NÃO vão para o banco: as 6 linhas inválidas. O backend só informa ao usuário (campo "rejeitadas" da resposta) e não grava nada delas.
+
+
+====================================================================================================
+PASSO 11 - DEPLOY (CADA PARTE EM SEU SERVIÇO)
+====================================================================================================
+  Python  : iniciar com  uvicorn api:app --host 0.0.0.0 --port 8000
+            variáveis: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, DB_SSLMODE=require, ETL_API_KEY
+  Backend : DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD,
+            CORS_ORIGINS (endereço do front publicado), ETL_URL (endereço do Python + /etl),
+            ETL_KEY (a mesma do ETL_API_KEY)
+  Front   : VITE_API_URL apontando para o backend publicado; npm run build gera a pasta dist/
+  Azure PostgreSQL: liberar no firewall o acesso dos serviços do backend e do Python.
+  As senhas ficam nas variáveis de ambiente do serviço, nunca em arquivo no Git.
+
+
+
+====================================================================================================
+PASSO 12 - TESTAR NO BANCO: SALVOU OS DADOS DA PLANILHA E AS ANÁLISES?
+====================================================================================================
+OBJETIVO
+  Ter certeza de que o Python GRAVOU no Azure PostgreSQL:
+    (a) os dados da planilha, já limpos  -> tabelas cliente, consultor, segmento, servico e contrato
+    (b) as análises prontas para o gráfico -> tabela estatistica_lote (coluna resultado, em JSON)
+    (c) o resultado do processamento -> tabela upload_lote (coluna status e mensagem)
+
+12.1 PROGRAMA PARA CONSULTAR O BANCO (escolha um)
+  DBeaver (gratuito) ........ https://dbeaver.io/download/  (Community Edition)
+  Extensão "PostgreSQL" no VS Code (opcional)
+  Passo a passo no DBeaver:
+    1. Database > New Database Connection > PostgreSQL > Next.
+    2. Preencha com os MESMOS dados do analytics-python/.env:
+         Host ........ valor de DB_HOST   (ex.: SEU-SERVIDOR.postgres.database.azure.com)
+         Port ........ 5432
+         Database .... valor de DB_NAME   (ex.: ctiinsights)
+         Username .... valor de DB_USER
+         Password .... valor de DB_PASSWORD
+    3. Aba "SSL": marque Use SSL e, em SSL mode, escolha "require".
+    4. Test Connection (se o DBeaver pedir para baixar o driver, aceite) > Finish.
+    5. Botão direito na conexão > SQL Editor > New SQL script. Cole as consultas abaixo
+       e execute com Ctrl+Enter (uma consulta por vez: deixe o cursor nela).
+  Se der "timeout": o IP do seu computador não está liberado no firewall do Azure.
+
+12.2 PASSO A PASSO DO TESTE (faça nesta ordem)
+
+TESTE A - O lote terminou? (tabela upload_lote)
+    SELECT id, status, total_linhas, linhas_validas, linhas_invalidas, mensagem
+      FROM upload_lote
+     ORDER BY id DESC;
+  A primeira linha é o lote mais novo. Anote o id (nos próximos testes troque o 1 pelo seu id).
+  Esperado com a planilha de exemplo: status PROCESSADO, total_linhas 38, linhas_validas 32,
+  linhas_invalidas 6 e uma mensagem de resumo.
+    PROCESSADO ........ o Python recebeu, calculou e gravou tudo.
+    (sem linha nenhuma) o Spring não conseguiu chamar o Python: nada foi gravado.
+    PROCESSANDO ....... o Python ainda está trabalhando (espere alguns segundos e rode de novo).
+    ERRO .............. leia a coluna mensagem: ela diz o motivo (veja o PASSO 9).
+
+TESTE B - Os dados da planilha foram salvos? (contagens)
+    SELECT COUNT(*) AS clientes FROM cliente WHERE lote_id = 1;
+        esperado: 32
+    SELECT COUNT(DISTINCT consultor_id) AS consultores FROM cliente WHERE lote_id = 1;
+        esperado: 4
+    SELECT COUNT(DISTINCT c.servico_id) AS servicos
+      FROM contrato c JOIN cliente cl ON cl.id = c.cliente_id
+     WHERE cl.lote_id = 1;
+        esperado: 6
+    SELECT COUNT(*) AS contratos
+      FROM contrato c JOIN cliente cl ON cl.id = c.cliente_id
+     WHERE cl.lote_id = 1;
+        esperado: 61
+  (Esses números valem para a planilha de exemplo. Com outra planilha eles mudam: o importante é
+   clientes = linhas_validas do TESTE A e contratos maior que zero.)
+  Ver alguns clientes gravados:
+    SELECT cl.codigo_cti, cl.nome, co.nome AS consultor, sg.nome AS segmento, cl.nivel, cl.faturamento_anual
+      FROM cliente cl JOIN consultor co ON co.id = cl.consultor_id
+                      JOIN segmento sg ON sg.id = cl.segmento_id
+     WHERE cl.lote_id = 1
+     ORDER BY cl.faturamento_anual DESC
+     LIMIT 5;
+  Ver os serviços de cada cliente:
+    SELECT cl.nome, s.nome AS servico, c.data_contratacao
+      FROM contrato c
+      JOIN cliente cl ON cl.id = c.cliente_id
+      JOIN servico s ON s.id = c.servico_id
+     WHERE cl.lote_id = 1
+     ORDER BY cl.nome
+     LIMIT 10;
+
+TESTE C - As análises foram salvas? (tabela estatistica_lote)
+    SELECT lote_id, gerado_em, LENGTH(resultado) AS tamanho
+      FROM estatistica_lote
+     WHERE lote_id = 1;
+        esperado: 1 linha (um resultado por lote), tamanho maior que zero.
+  Ver os números principais dentro do JSON (a coluna resultado é TEXTO com JSON; ::json converte):
+    SELECT (resultado::json -> 'resumo' ->> 'totalClientes') AS clientes,
+           (resultado::json -> 'resumo' ->> 'media')         AS media,
+           (resultado::json -> 'resumo' ->> 'mediana')       AS mediana,
+           (resultado::json -> 'resumo' ->> 'desvioPadrao')  AS desvio_padrao
+      FROM estatistica_lote
+     WHERE lote_id = 1;
+        esperado (planilha de exemplo): 32 | 2261250 | 1470000 | 1909013.85
+  Conferir que as listas dos gráficos existem (quantos itens cada uma tem):
+    SELECT json_array_length(resultado::json -> 'porSegmento')  AS segmentos,
+           json_array_length(resultado::json -> 'porNivel')     AS niveis,
+           json_array_length(resultado::json -> 'porConsultor') AS consultores,
+           json_array_length(resultado::json -> 'porServico')   AS servicos,
+           json_array_length(resultado::json -> 'porMes')       AS meses,
+           json_array_length(resultado::json -> 'insights')     AS frases
+      FROM estatistica_lote
+     WHERE lote_id = 1;
+        esperado: todos maiores que zero (consultores = 4, servicos = 6).
+  Ler as frases (insights) que o Python gerou:
+    SELECT json_array_elements_text(resultado::json -> 'insights') AS frase
+      FROM estatistica_lote
+     WHERE lote_id = 1;
+
+TESTE D - O Spring consegue ler o que o Python salvou? (Thunder Client)
+    1. POST http://localhost:8080/api/auth/login  (email e senha) > copie o token.
+    2. GET  http://localhost:8080/api/dashboard?loteId=1  [PRÓXIMA ETAPA]
+       Header:  Authorization: Bearer <token>
+    Esperado: status 200 e um JSON assim:
+       { "lote": { "id": 1, "status": "PROCESSADO", ... },
+         "geradoEm": "2026-10-21T19:10:00Z",
+         "estatisticas": { "resumo": {...}, "porSegmento": [...], "porNivel": [...], ... } }
+    O valor de estatisticas é EXATAMENTE o JSON do TESTE C. Se estatisticas vier null, o Python
+    ainda não terminou (volte ao TESTE A).
+
+TESTE E - Simular uma falha (opcional, para a turma ver o erro)
+    1. Desligue a API do Python (Ctrl+C no terminal do uvicorn).
+    2. Envie a planilha de novo pelo front.
+    3. Rode:  SELECT id, status, mensagem FROM upload_lote ORDER BY id DESC LIMIT 1;
+       Esperado: ERRO e a mensagem "Não foi possível falar com o serviço Python em ...".
+    4. Ligue o Python de novo (uvicorn api:app --port 8000) e envie a planilha outra vez.
+
+12.3 COMO SEI QUE DEU CERTO (os 5 sinais)
+    [ ] 1. O terminal do Python mostrou  POST /etl ... 200 OK
+    [ ] 2. upload_lote.status = PROCESSADO                    (TESTE A)
+    [ ] 3. cliente = 32 e contrato = 61                       (TESTE B)
+    [ ] 4. estatistica_lote tem 1 linha com média 2261250     (TESTE C)
+    [ ] 5. GET /api/dashboard devolve 200 com "estatisticas"  (TESTE D) e o Dashboard do front mostra os gráficos (PASSO 13)  [PRÓXIMA ETAPA]
+  Se algum sinal falhar, o primeiro que falhou mostra onde parou: Python (1), Spring (2) ou gravação (3 e 4).
+
+12.4 APAGAR UM LOTE DE TESTE (opcional, para repetir)
+    DELETE FROM upload_lote WHERE id = 1;
+  Cuidado: apaga também as linhas, clientes, contratos e a estatística desse lote (ON DELETE CASCADE).
+
+
+====================================================================================================
+PASSO 12.5 - O FRONT-END DO UPLOAD (CÓDIGO COMPLETO E COMENTADO)
+====================================================================================================
+O front lê o Excel, valida linha por linha (mesmas regras do Spring) e envia ao backend SÓ as linhas válidas:
+  POST /api/uploads/validadas  ->  Spring valida de novo e encaminha ao Python  ->  Python grava no banco.
+O que o backend devolve: { arquivoNome, status, totalLinhas, linhasValidas, linhasInvalidas, rejeitadas }.
+Os demais arquivos do front (login, cadastro, router, main.js) estão no zip, em frontend/src/.
+
+ARQUIVO: frontend/src/services/api.js
+O QUE FAZ: api.js: cria o axios, põe o token no cabeçalho e tem o uploadService que chama o backend.
+----------------------------------------------------------------------------------------------------
+// ============================================================================
+// services/api.js — TODA conversa com o backend (Spring Boot) passa por aqui.
+// Parte 1: a conexão (axios). Parte 2: uma função para cada rota do backend.
+// ============================================================================
+import axios from 'axios' // axios: biblioteca que faz chamadas HTTP (GET, POST...) de forma simples
+
+const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').replace(/\/+$/, '') // endereço da API (vem do .env), sem "/" no final
+
+export const api = axios.create({ baseURL: BASE, timeout: 60000 }) // cria a conexão: todo pedido começa em BASE e espera até 60 s
+
+// O token JWT fica na store de login. Para não importar a store aqui (importação circular), a store nos entrega duas funções.
+let pegarToken = () => null // função que devolve o token (trocada por configurarApi)
+let aoExpirar = () => {} // função chamada quando o servidor responde 401
+
+export function configurarApi({ getToken, onUnauthorized }) { // a store chama isto uma vez, no main.js
+  pegarToken = getToken // guarda a função que lê o token
+  aoExpirar = onUnauthorized // guarda a função que faz logout
+}
+
+api.interceptors.request.use((config) => { // INTERCEPTADOR: roda antes de TODO pedido
+  const token = pegarToken() // lê o token salvo
+  if (token) config.headers.Authorization = `Bearer ${token}` // anexa o token: o Spring Security lê este cabeçalho
+  return config // segue com o pedido
+})
+
+api.interceptors.response.use( // INTERCEPTADOR: roda em TODA resposta
+  (resposta) => resposta, // sucesso: não mexe
+  (erro) => { // falha:
+    const url = erro.config?.url || '' // qual rota falhou
+    const publica = url.includes('/auth/login') || url.includes('/auth/register') // nessas rotas 401 = senha errada
+    if (erro.response?.status === 401 && !publica) aoExpirar() // token vencido: sai e volta ao login
+    return Promise.reject(erro) // repassa o erro para quem chamou
+  },                                                        // fim da configuração
+)                                                           // fim da chamada
+
+// Transforma qualquer erro em uma frase para mostrar na tela. O backend responde erros como { "erro": "texto" }.
+export function mensagemDeErro(erro) {                      // transforma o erro do axios numa mensagem em português
+  if (erro?.response?.data?.erro) return erro.response.data.erro // mensagem escrita pelo backend
+  if (erro?.response) return `Erro ${erro.response.status} no servidor.` // outro erro HTTP
+  return 'Não consegui falar com o servidor. Ele está rodando? (mvn spring-boot:run)' // sem resposta: backend desligado
+}
+
+const corpo = (resposta) => resposta.data // o axios coloca a resposta em .data; esta função pega só ela
+
+export const authService = { // ---- login e cadastro ----
+  entrar: (email, senha) => api.post('/auth/login', { email, senha }).then(corpo), // POST /api/auth/login -> { token, usuario }
+  cadastrar: (dados) => api.post('/auth/register', dados).then(corpo), // POST /api/auth/register (conta nasce PENDENTE)
+  eu: () => api.get('/auth/me').then(corpo), // GET /api/auth/me -> confere se o token ainda vale
+}
+
+export const adminService = { // ---- liberação de acesso (só ADMIN) ----
+  listar: (status) => api.get('/admin/usuarios', { params: { status } }).then(corpo), // GET lista usuários (filtra por status)
+  alterarStatus: (id, status) => api.patch(`/admin/usuarios/${id}/status`, { status }).then(corpo), // PATCH APROVADO | BLOQUEADO | PENDENTE
+}
+
+export const uploadService = { // ---- envio da planilha ----
+  enviarValidadas: (dados) => api.post('/uploads/validadas', dados).then(corpo), // POST só com as linhas aprovadas pelo Pinia
+}
+
+export const dashboardService = { // ---- dados dos gráficos ----
+  obter: (loteId) => api.get('/dashboard', { params: { loteId } }).then(corpo), // GET -> { lote, geradoEm, estatisticas }
+}
+----------------------------------------------------------------------------------------------------
+FIM DO ARQUIVO api.js
+
+ARQUIVO: frontend/src/stores/upload.js
+O QUE FAZ: upload.js (Pinia): lê o Excel, valida cada linha no navegador e envia SÓ as válidas ao backend.
+----------------------------------------------------------------------------------------------------
+// ============================================================================
+// stores/upload.js — Pinia: o CORAÇÃO do projeto (não existe pasta utils: tudo fica aqui).
+// 1) analisarArquivo: lê o Excel e valida cada linha no navegador.
+// 2) liberarParaBackend: envia ao Spring Boot SOMENTE as linhas válidas. As inválidas nunca saem do navegador.
+// As regras de validação são as MESMAS do Spring (ClienteValidacaoService.java): o front avisa na hora, o back confere de novo.
+// ============================================================================
+import { defineStore } from 'pinia' // cria a store
+import { computed, ref } from 'vue' // ref e computed
+import { readSheet } from 'read-excel-file/browser' // readSheet: lê uma aba do Excel no navegador (sem servidor)
+import { uploadService, mensagemDeErro } from '../services/api' // chamada ao backend
+
+export const LIMITE_MB = 5 // tamanho máximo do arquivo
+
+// ---------------------------------------------------------------------------
+// PARTE 1 — REGRAS DE VALIDAÇÃO (funções simples, usadas pela store lá embaixo)
+// ---------------------------------------------------------------------------
+// Colunas que a planilha precisa ter (nomes iguais aos do banco).
+const COLUNAS = [ // lista com as 10 colunas
+  'codigo_cliente', 'nome_cliente', 'consultor', 'segmento', 'nivel_cliente', // colunas 1 a 5
+  'faturamento_anual', 'servicos_contratados', 'data_contratacao', 'cidade', 'uf', // colunas 6 a 10
+]
+// Estas 8 são obrigatórias. cidade e uf são opcionais.
+const OBRIGATORIAS = COLUNAS.slice(0, 8) // pega as 8 primeiras
+
+// Tamanho máximo de cada texto (igual ao banco de dados).
+const TAMANHO_MAXIMO = { codigo_cliente: 60, nome_cliente: 255, consultor: 120, segmento: 80, nivel_cliente: 20, servicos_contratados: 400, cidade: 120, uf: 10 } // tamanho máximo de cada texto (igual ao banco)
+
+// Segmentos aceitos: chave = texto simplificado, valor = nome oficial.
+const SEGMENTOS = { ind: 'Indústria', industria: 'Indústria', comercio: 'Comércio', servicos: 'Serviços', servico: 'Serviços', saude: 'Saúde', educacao: 'Educação', tecnologia: 'Tecnologia' } // segmentos aceitos (texto simples -> nome oficial)
+
+// Tira acento, deixa minúsculo e remove pontuação: "INDÚSTRIA" -> "industria", "IND." -> "ind".
+function simplificar(texto) { // recebe um texto
+  return texto.normalize('NFD').replace(/[̀-ͯ]/g, '') // separa o acento da letra e apaga o acento
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() // minúsculo, só letras/números
+}
+
+// Lê o faturamento. Aceita 1850000, 1850000.50, 1.850.000,50 e "R$ 1.850.000,50". Devolve número ou null.
+function lerNumero(texto) { // recebe o texto digitado
+  let t = texto.replace('R$', '').replace(/\s/g, '') // tira "R$" e espaços
+  if (!/^-?[0-9.,]+$/.test(t)) return null // se tem letra, não é número
+  const ponto = t.includes('.'), virgula = t.includes(',') // tem ponto? tem vírgula?
+  if (ponto && virgula) { // formato 1.850.000,50 ou 1,850,000.50
+    t = t.lastIndexOf(',') > t.lastIndexOf('.') ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '') // o último símbolo é o decimal
+  } else if (virgula) { // só vírgula
+    t = (t.match(/,/g) || []).length > 1 ? t.replace(/,/g, '') : t.replace(',', '.') // 1,5 vira 1.5
+  } else if (ponto && /^-?\d{1,3}(\.\d{3})+$/.test(t)) { // 1.850.000 é separador de milhar
+    t = t.replace(/\./g, '') // tira os pontos
+  }
+  const n = Number(t) // converte para número
+  return Number.isFinite(n) ? n : null // se não deu certo, null
+}
+
+// Lê a data (dd/mm/aaaa ou aaaa-mm-dd). Devolve "aaaa-mm-dd" ou null.
+function lerData(texto) { // recebe o texto
+  let ano, mes, dia // peças da data
+  let m = texto.match(/^(\d{4})-(\d{2})-(\d{2})/) // formato ISO: 2024-03-15
+  if (m) { ano = +m[1]; mes = +m[2]; dia = +m[3] } // + converte texto em número
+  else if ((m = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) { ano = +m[3]; mes = +m[2]; dia = +m[1] } // formato BR: 15/03/2024
+  else return null // nenhum formato bateu
+  const d = new Date(Date.UTC(ano, mes - 1, dia)) // monta a data (mês começa em 0)
+  if (d.getUTCFullYear() !== ano || d.getUTCMonth() !== mes - 1 || d.getUTCDate() !== dia) return null // 31/02 não existe
+  if (ano < 1990) return null // ano antigo demais
+  return d.toISOString().slice(0, 10) // devolve aaaa-mm-dd
+}
+
+// Valida TODAS as linhas. Entrada: [{ numero, campos:{coluna: texto} }]. Saída: uma lista com o resultado de cada linha.
+function validarLinhas(linhas) { // recebe a lista de linhas lidas da planilha
+  const codigosVistos = new Map() // código -> número da linha onde apareceu primeiro
+  const hoje = new Date().toISOString().slice(0, 10) // data de hoje (para o aviso de data no futuro)
+  return linhas.map((linha) => { // para cada linha...
+    const erros = [] // lista de erros (bloqueiam a linha)
+    const avisos = [] // lista de avisos (não bloqueiam)
+    const v = {} // valores já limpos
+    for (const col of COLUNAS) { // 1) limpa cada campo
+      const bruto = linha.campos[col] ?? '' // texto original (vazio se não existe)
+      const limpo = String(bruto).trim().replace(/\s{2,}/g, ' ') // tira espaços das pontas e duplicados
+      if (limpo !== bruto && bruto !== '') avisos.push(`${col}: espaços extras removidos`) // avisa se mudou
+      v[col] = limpo // guarda o valor limpo
+      const max = TAMANHO_MAXIMO[col] // limite de tamanho desse campo
+      if (max && limpo.length > max) erros.push(`${col}: excede ${max} caracteres`) // texto grande demais
+    }
+    for (const col of OBRIGATORIAS) if (!v[col]) erros.push(`${col}: campo obrigatório vazio`) // 2) obrigatórios
+
+    if (v.codigo_cliente) { // 3) código: formato e duplicidade
+      if (!/^[A-Za-z0-9_-]{1,60}$/.test(v.codigo_cliente)) erros.push("codigo_cliente: use apenas letras, números, '-' ou '_'") // formato
+      const chave = v.codigo_cliente.toUpperCase() // CLI-1 e cli-1 são o mesmo código
+      if (codigosVistos.has(chave)) erros.push(`codigo_cliente: código duplicado (já usado na linha ${codigosVistos.get(chave)})`) // repetido
+      else codigosVistos.set(chave, linha.numero) // primeira vez: guarda a linha
+    }
+    if (v.segmento && !SEGMENTOS[simplificar(v.segmento)]) erros.push(`segmento: '${v.segmento}' não reconhecido (use Indústria, Comércio, Serviços, Saúde, Educação ou Tecnologia)`) // 4) segmento
+
+    if (v.nivel_cliente && !['A', 'B', 'C'].includes(v.nivel_cliente.toUpperCase())) erros.push(`nivel_cliente: '${v.nivel_cliente}' inválido (use A, B ou C)`) // 5) nível
+
+    if (v.faturamento_anual) { // 6) faturamento
+      const n = lerNumero(v.faturamento_anual) // tenta virar número
+      if (n === null) erros.push(`faturamento_anual: '${v.faturamento_anual}' não é um número`) // não é número
+      else if (n < 0) erros.push('faturamento_anual: não pode ser negativo') // negativo
+      else if (n >= 1e12) erros.push('faturamento_anual: valor acima do permitido') // absurdo
+      else { if (n === 0) avisos.push('faturamento_anual: valor zerado'); v.faturamento_anual = n.toFixed(2) } // ok: guarda com 2 casas
+    }
+    if (v.servicos_contratados && v.servicos_contratados.split(';').every((s) => !s.trim())) erros.push('servicos_contratados: nenhum serviço informado') // 7) serviços separados por ;
+
+    if (v.data_contratacao) { // 8) data
+      const d = lerData(v.data_contratacao) // tenta ler
+      if (!d) erros.push(`data_contratacao: '${v.data_contratacao}' não é uma data válida (use dd/mm/aaaa ou aaaa-mm-dd)`) // inválida
+      else { if (d > hoje) avisos.push('data_contratacao: data no futuro'); v.data_contratacao = d } // ok
+    }
+    if (v.uf && !/^[A-Za-z]{2}$/.test(v.uf)) erros.push(`uf: '${v.uf}' inválida (use a sigla com 2 letras)`) // 9) UF opcional
+
+    return { numero: linha.numero, valores: v, erros, avisos, valida: erros.length === 0 } // resultado da linha
+  })
+}
+
+// ---------------------------------------------------------------------------
+// PARTE 2 — LER O ARQUIVO .xlsx
+// ---------------------------------------------------------------------------
+// Deixa o cabeçalho "Código do Cliente " igual a "codigo_do_cliente" para comparar.
+function normalizar(texto) { // recebe o texto do cabeçalho
+  return String(texto ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '') // tira acentos
+    .trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') // minúsculo, "_" no lugar de espaços
+}
+
+// Transforma o valor de uma célula em texto (datas viram dd/mm/aaaa, números viram texto).
+function celulaParaTexto(valor) { // recebe o valor da célula
+  if (valor === null || valor === undefined) return '' // célula vazia
+  if (valor instanceof Date) return valor.toISOString().slice(0, 10) // data do Excel vira aaaa-mm-dd
+  return String(valor) // número ou texto vira texto
+}
+
+// Lê o arquivo. Devolve { linhas: [{ numero, campos }], colunasFaltando: [] }.
+async function lerPlanilha(arquivo) { // async: leitura demora, então usamos await
+  let tabela // vai guardar a matriz de linhas e colunas
+  try {                                                     // tenta ler o arquivo
+    tabela = await readSheet(arquivo, 'upload_clientes') // tenta a aba combinada
+  } catch {                                                 // se não conseguir ler, devolve o erro
+    tabela = await readSheet(arquivo) // se não existe, usa a primeira aba
+  }
+  if (!tabela.length) return { linhas: [], colunasFaltando: COLUNAS.slice(0, 8) } // arquivo vazio
+  const cabecalho = tabela[0].map(normalizar) // primeira linha = nomes das colunas
+  const colunasFaltando = COLUNAS.slice(0, 8).filter((c) => !cabecalho.includes(c)) // obrigatórias que não vieram
+  const linhas = [] // resultado
+  tabela.slice(1).forEach((celulas, i) => { // as linhas de dados começam depois do cabeçalho
+    const campos = {} // um objeto { coluna: texto }
+    cabecalho.forEach((nome, j) => { if (COLUNAS.includes(nome)) campos[nome] = celulaParaTexto(celulas[j]) }) // só colunas conhecidas
+    if (Object.values(campos).every((t) => t.trim() === '')) return // ignora linha totalmente vazia
+    linhas.push({ numero: i + 2, campos }) // numero = linha no Excel (1 é o cabeçalho)
+  })
+  return { linhas, colunasFaltando }                        // devolve as linhas lidas e as colunas que faltam
+}
+
+// ---------------------------------------------------------------------------
+// PARTE 3 — A STORE (o que as telas usam)
+// ---------------------------------------------------------------------------
+export const useUploadStore = defineStore('upload', () => { // cria a store 'upload' (guarda o estado da tela de upload)
+  const arquivoNome = ref('') // nome do arquivo escolhido
+  const resultados = ref([]) // resultado de CADA linha (válida ou não)
+  const colunasFaltando = ref([]) // colunas obrigatórias que não existem na planilha
+  const analisando = ref(false) // true enquanto lê o arquivo
+  const enviando = ref(false) // true enquanto envia ao backend
+  const erro = ref('') // mensagem de erro para a tela
+  const lote = ref(null) // lote criado no backend depois do envio
+
+  const validas = computed(() => resultados.value.filter((r) => r.valida)) // só as linhas boas
+  const invalidas = computed(() => resultados.value.filter((r) => !r.valida)) // só as linhas com erro
+  const comAviso = computed(() => resultados.value.filter((r) => r.valida && r.avisos.length)) // boas, mas com aviso
+  const podeLiberar = computed(() => validas.value.length > 0 && !colunasFaltando.value.length) // botão "Liberar" habilitado?
+
+  function limpar() { // volta ao começo (novo upload)
+    arquivoNome.value = ''; resultados.value = []; colunasFaltando.value = []; erro.value = ''; lote.value = null // zera tudo para escolher outra planilha
+  }
+
+  async function analisarArquivo(arquivo) { // chamado pela tela de Upload
+    limpar() // zera o que havia
+    if (!arquivo) { erro.value = 'Escolha um arquivo.'; return false } // nenhum arquivo
+    if (!arquivo.name.toLowerCase().endsWith('.xlsx')) { erro.value = 'Envie um arquivo .xlsx (Excel).'; return false } // só xlsx
+    if (arquivo.size > LIMITE_MB * 1024 * 1024) { erro.value = `O arquivo tem mais de ${LIMITE_MB} MB.`; return false } // grande demais
+    analisando.value = true // liga o "carregando"
+    try {                                                   // tenta analisar a planilha
+      const lida = await lerPlanilha(arquivo) // lê o Excel
+      arquivoNome.value = arquivo.name // guarda o nome
+      colunasFaltando.value = lida.colunasFaltando // colunas que faltam
+      resultados.value = colunasFaltando.value.length ? [] : validarLinhas(lida.linhas) // valida (se a planilha tem as colunas)
+      if (!colunasFaltando.value.length && !resultados.value.length) { erro.value = 'A planilha não tem linhas de dados.'; return false } // vazia
+      return true // deu certo: a tela pode ir para o relatório
+    } catch {                                               // se falhar, mostra o erro
+      erro.value = 'Não consegui ler o arquivo. Ele é um .xlsx válido?' // arquivo corrompido
+      return false                                          // avisa que não deu certo
+    } finally {                                             // no final, sempre
+      analisando.value = false // desliga o "carregando"
+    }
+  }
+
+  async function liberarParaBackend() { // chamado pelo botão "Liberar para o back-end"
+    if (!podeLiberar.value) return false // segurança: sem linhas válidas não envia
+    enviando.value = true; erro.value = '' // começa o envio
+    try {                                                   // tenta enviar só as linhas válidas
+      const linhas = validas.value.map((r) => ({ // monta SÓ as linhas válidas (invalidas.value nunca entra aqui)
+        numeroLinha: r.numero, // linha original no Excel
+        codigoCliente: r.valores.codigo_cliente,            // código do cliente
+        nomeCliente: r.valores.nome_cliente,                // nome do cliente
+        consultor: r.valores.consultor,                     // consultor
+        segmento: r.valores.segmento,                       // segmento
+        nivelCliente: r.valores.nivel_cliente,              // nível (A, B ou C)
+        faturamentoAnual: r.valores.faturamento_anual,      // faturamento anual
+        servicosContratados: r.valores.servicos_contratados, // serviços separados por ;
+        dataContratacao: r.valores.data_contratacao,        // data da contratação
+        cidade: r.valores.cidade,                           // cidade
+        uf: r.valores.uf,                                   // UF
+      }))                                                   // fim da lista de linhas
+      lote.value = await uploadService.enviarValidadas({ arquivoNome: arquivoNome.value, descartadas: invalidas.value.length, linhas }) // POST /api/uploads/validadas
+      return true                                           // avisa que deu certo
+    } catch (e) {                                           // se falhar, guarda a mensagem
+      erro.value = mensagemDeErro(e) // mostra o motivo
+      return false                                          // avisa que não deu certo
+    } finally {                                             // no final, sempre
+      enviando.value = false                                // desliga o 'Enviando...'
+    }
+  }
+
+  return { arquivoNome, resultados, colunasFaltando, analisando, enviando, erro, lote, validas, invalidas, comAviso, podeLiberar, limpar, analisarArquivo, liberarParaBackend } // o que a store entrega às telas
+})
+----------------------------------------------------------------------------------------------------
+FIM DO ARQUIVO upload.js
+
+ARQUIVO: frontend/src/views/UploadView.vue
+O QUE FAZ: UploadView.vue: a tela de upload (escolher o arquivo, ver os erros, enviar).
+----------------------------------------------------------------------------------------------------
+<script setup>                                              // código do componente (Vue 3, script setup)
+// UploadView.vue — escolhe a planilha. O Pinia lê e valida; se deu certo, abre o relatório de erros.
+import { ref } from 'vue' // ref: valores que mudam
+import { useRouter } from 'vue-router' // para trocar de tela
+import { useUploadStore, LIMITE_MB } from '../stores/upload' // store do upload
+
+const upload = useUploadStore() // acesso à store
+const router = useRouter() // acesso às rotas
+const arrastando = ref(false) // true enquanto o arquivo está sobre a caixa
+
+async function escolher(arquivo) { // recebe o arquivo (do clique ou do arrastar)
+  const ok = await upload.analisarArquivo(arquivo) // lê e valida no navegador
+  if (ok) router.push('/relatorio') // mostra o relatório de erros
+}
+function aoSoltar(e) { arrastando.value = false; escolher(e.dataTransfer.files[0]) } // soltou o arquivo na caixa
+function aoSelecionar(e) { escolher(e.target.files[0]) } // escolheu pelo botão
+</script>
+
+<template>                                                  <!-- início do HTML da página -->
+  <section class="max-w-2xl mx-auto">                       <!-- caixa principal -->
+    <h1 class="text-2xl font-bold text-azul-escuro mb-1">Enviar planilha</h1> <!-- título -->
+    <p class="text-cinza mb-4">Escolha o arquivo .xlsx (aba <b>upload_clientes</b>, até {{ LIMITE_MB }} MB). Antes de enviar ao servidor você vê os erros.</p> <!-- instrução: arquivo .xlsx, aba upload_clientes -->
+
+    <label class="block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer bg-white transition"
+      :class="arrastando ? 'border-vermelho bg-red-50' : 'border-azul'"
+      @dragover.prevent="arrastando = true" @dragleave="arrastando = false" @drop.prevent="aoSoltar"> <!-- caixa de arrastar -->
+      <input type="file" accept=".xlsx" class="hidden" @change="aoSelecionar" /> <!-- input escondido -->
+      <p class="text-lg font-semibold text-azul">{{ upload.analisando ? 'Lendo a planilha...' : 'Arraste o arquivo aqui ou clique para escolher' }}</p> <!-- texto da área de arrastar -->
+    </label>
+
+    <p v-if="upload.erro" class="text-vermelho bg-red-50 rounded p-3 mt-4">{{ upload.erro }}</p> <!-- mostra o erro, se houver -->
+
+    <div class="bg-azul-claro rounded-lg p-4 mt-6 text-sm"> <!-- lembrete das colunas -->
+      <p class="font-semibold text-azul-escuro mb-1">Colunas esperadas</p> <!-- título da lista de colunas -->
+      <p class="font-mono text-xs break-words">codigo_cliente, nome_cliente, consultor, segmento, nivel_cliente, faturamento_anual, servicos_contratados, data_contratacao, cidade, uf</p> <!-- as 10 colunas que a planilha precisa ter -->
+    </div>
+  </section>
+</template>
+----------------------------------------------------------------------------------------------------
+FIM DO ARQUIVO UploadView.vue
+
+
+====================================================================================================
+PASSO 13 - (PRÓXIMA ETAPA, DEPOIS DESTA AULA) EXIBIR OS DADOS NO CHART DO FRONT
+====================================================================================================
+OBJETIVO
+  Pegar o JSON que o Python salvou no banco (estatistica_lote.resultado) e desenhar os gráficos
+  na página Dashboard do front (Vue 3 + Chart.js). O front NÃO calcula nada: só mostra.
+
+13.1 O CAMINHO DOS DADOS ATÉ O GRÁFICO
+    Python grava  ->  Azure (estatistica_lote.resultado)  ->  Spring lê  ->  front busca e desenha
+    1. DashboardView.vue abre e chama  dashboardService.obter(loteId)           (services/api.js)
+    2. api.js faz  GET http://localhost:8080/api/dashboard?loteId=1  com o token no cabeçalho
+    3. (próxima etapa) um endpoint que leia a tabela estatistica_lote e devolva  { lote, geradoEm, estatisticas }. Ainda NÃO existe no backend.
+    4. DashboardView guarda  resp.estatisticas  em  d  (o JSON do Python)
+    5. Cada gráfico pega UMA lista do JSON (porSegmento, porNivel...) e separa em
+       rotulos (os nomes, eixo X) e valores (os números, altura das barras)
+    6. BaseChart.vue recebe rotulos e valores e o Chart.js desenha no <canvas>
+
+13.2 O QUE INSTALAR NO FRONT (uma vez só, na pasta frontend)
+    Node.js 20 ou mais novo ........ https://nodejs.org   (conferir: node --version)
+    npm install                     instala tudo do package.json. Os que importam aqui:
+        chart.js ....... desenha os gráficos no <canvas>
+        axios .......... faz a chamada GET ao Spring
+        pinia .......... guarda o login e o lote enviado
+        vue-router ..... as páginas (rota /dashboard)
+    Se faltar só o gráfico:   npm install chart.js
+    Rodar o front:            npm run dev   (abre http://localhost:5173)
+    Variável (frontend/.env): VITE_API_URL=http://localhost:8080/api
+
+13.3 ONDE CADA PEÇA FICA (3 arquivos)
+    frontend/src/services/api.js ............ dashboardService.obter(loteId): faz o GET /dashboard
+    frontend/src/components/BaseChart.vue ... componente que desenha UM gráfico (reusado por todos)
+    frontend/src/views/DashboardView.vue .... a página: busca os dados e usa o BaseChart várias vezes
+
+13.4 O JSON QUE CHEGA AO FRONT (o que está em  d  dentro do DashboardView)
+    d.resumo        { totalClientes, faturamentoTotal, media, mediana, desvioPadrao, minimo, maximo, q1, q3,
+                      segmentoMaisFrequente, nivelMaisFrequente, servicoMaisContratado, ... }   -> cartões
+    d.porSegmento   [ { segmento, clientes, percentual, faturamentoTotal, media, ... } ]          -> barras
+    d.porNivel      [ { nivel, clientes, ... } ]  (A, B, C)                                       -> rosca
+    d.porConsultor  [ { consultor, clientes, faturamentoTotal, ... } ]                            -> barras deitadas
+    d.porServico    [ { servico, contratos, percentual, faturamentoMedio } ]                      -> barras deitadas
+    d.porMes        [ { mes: "2025-03", clientes, faturamento, acumulado } ]                      -> linha
+    d.topClientes   [ { codigo, nome, segmento, nivel, faturamento } ]  (os 5 maiores)
+    d.correlacao    correlação entre quantidade de serviços e faturamento
+    d.qualidade     { linhasRecebidas, linhasValidas, linhasInvalidas, correcoes... }
+    d.insights      [ "frase gerada pelo Python", ... ]
+
+13.5 A IDEIA CENTRAL: LISTA DO JSON -> rotulos + valores -> BaseChart
+    Exemplo do gráfico "Clientes por segmento". O Python gravou:
+        "porSegmento": [ {"segmento": "Comércio", "clientes": 9, ...}, {"segmento": "Indústria", "clientes": 7, ...} ]
+    No DashboardView:
+        const seg = computed(() => d.value?.porSegmento ?? [])        // a lista (vazia se ainda não chegou)
+        <BaseChart tipo="bar" titulo="Clientes"
+                   :rotulos="seg.map((x) => x.segmento)"              // ["Comércio", "Indústria"]  -> eixo X
+                   :valores="seg.map((x) => x.clientes)" />           // [9, 7]                     -> altura das barras
+    .map((x) => x.campo) percorre a lista e devolve só aquele campo. É só isso.
+
+13.6 COMO ADICIONAR UM NOVO GRÁFICO (exemplo: Top 5 clientes por faturamento)
+    1. No <script setup> do DashboardView.vue, crie o atalho (junto dos outros: seg, niv, con...):
+           const top = computed(() => d.value?.topClientes ?? [])     // lista dos 5 maiores clientes
+    2. No <template>, dentro do <div class="grid ...">, copie uma caixa e troque os dados:
+           <div class="bg-white rounded-lg p-4 shadow-sm">
+             <h2 class="font-bold text-azul-escuro mb-2">Top 5 clientes</h2>
+             <BaseChart tipo="bar" horizontal titulo="Faturamento"
+                        :rotulos="top.map((x) => x.nome)"             // nome do cliente
+                        :valores="top.map((x) => x.faturamento)" />   // faturamento
+           </div>
+    3. Salve. O npm run dev atualiza a página sozinho.
+    Tipos aceitos em tipo=:  "bar" (barras)  |  "line" (linha)  |  "doughnut" (rosca).
+    horizontal deita as barras (bom para nomes grandes).
+
+13.7 COMO TESTAR NO NAVEGADOR
+    1. Python, Spring e front ligados (PASSO 7) e a planilha enviada (lote PROCESSADO).
+    2. Abra http://localhost:5173, faça login e entre em Dashboard.
+    3. Esperado (planilha de exemplo): cartão Clientes 32, Média R$ 2.261.250,00, Mediana R$ 1.470.000,00,
+       5 gráficos e a caixa "O que os dados mostram" com as frases.
+    4. F12 > aba Network > clique na chamada "dashboard?loteId=..." > aba Response: é o JSON do TESTE C.
+    5. Mensagens da tela:
+         "O Python está processando a planilha..." ... o lote existe, mas o Python ainda não terminou
+                                                      (a tela pergunta de novo a cada 5 segundos sozinha).
+         mensagem laranja com erro ................... ainda não há lote processado: envie a planilha em /upload.
+    6. Os números dos cartões devem ser IGUAIS aos do TESTE C (consulta no banco).
+    7. Gráfico em branco? Veja o Console (F12): erro 401 = login expirou; 404 = sem lote; lista vazia = TESTE C.
+
+13.8 ARQUIVOS COMPLETOS COM COMENTÁRIO NA FRENTE
+    Em JavaScript e Vue o comentário usa  //  (no <script>)  e  <!-- -->  (no <template>).
+
+----------------------------------------------------------------------------------------------------
+ARQUIVO 1/3  frontend/src/services/api.js   (trecho do dashboard; o arquivo inteiro está no projeto)
+Responsabilidade: toda conversa com o Spring passa por aqui. O interceptador anexa o token em todo pedido.
+----------------------------------------------------------------------------------------------------
+// ============================================================================
+// services/api.js — TODA conversa com o backend (Spring Boot) passa por aqui.
+// Parte 1: a conexão (axios). Parte 2: uma função para cada rota do backend.
+// ============================================================================
+import axios from 'axios' // axios: biblioteca que faz chamadas HTTP (GET, POST...) de forma simples
+
+const BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').replace(/\/+$/, '') // endereço da API (vem do .env), sem "/" no final
+
+export const api = axios.create({ baseURL: BASE, timeout: 60000 }) // cria a conexão: todo pedido começa em BASE e espera até 60 s
+
+// O token JWT fica na store de login. Para não importar a store aqui (importação circular), a store nos entrega duas funções.
+let pegarToken = () => null // função que devolve o token (trocada por configurarApi)
+let aoExpirar = () => {} // função chamada quando o servidor responde 401
+
+export function configurarApi({ getToken, onUnauthorized }) { // a store chama isto uma vez, no main.js
+  pegarToken = getToken // guarda a função que lê o token
+  aoExpirar = onUnauthorized // guarda a função que faz logout
+}
+
+api.interceptors.request.use((config) => { // INTERCEPTADOR: roda antes de TODO pedido
+  const token = pegarToken() // lê o token salvo
+  if (token) config.headers.Authorization = `Bearer ${token}` // anexa o token: o Spring Security lê este cabeçalho
+  return config // segue com o pedido
+})
+
+api.interceptors.response.use( // INTERCEPTADOR: roda em TODA resposta
+  (resposta) => resposta, // sucesso: não mexe
+  (erro) => { // falha:
+    const url = erro.config?.url || '' // qual rota falhou
+    const publica = url.includes('/auth/login') || url.includes('/auth/register') // nessas rotas 401 = senha errada
+    if (erro.response?.status === 401 && !publica) aoExpirar() // token vencido: sai e volta ao login
+    return Promise.reject(erro) // repassa o erro para quem chamou
+  },
+)
+
+// Transforma qualquer erro em uma frase para mostrar na tela. O backend responde erros como { "erro": "texto" }.
+export function mensagemDeErro(erro) {
+  if (erro?.response?.data?.erro) return erro.response.data.erro // mensagem escrita pelo backend
+  if (erro?.response) return `Erro ${erro.response.status} no servidor.` // outro erro HTTP
+  return 'Não consegui falar com o servidor. Ele está rodando? (mvn spring-boot:run)' // sem resposta: backend desligado
+}
+
+const corpo = (resposta) => resposta.data // o axios coloca a resposta em .data; esta função pega só ela
+
+export const authService = { // ---- login e cadastro ----
+  entrar: (email, senha) => api.post('/auth/login', { email, senha }).then(corpo), // POST /api/auth/login -> { token, usuario }
+  cadastrar: (dados) => api.post('/auth/register', dados).then(corpo), // POST /api/auth/register (conta nasce PENDENTE)
+  eu: () => api.get('/auth/me').then(corpo), // GET /api/auth/me -> confere se o token ainda vale
+}
+
+export const adminService = { // ---- liberação de acesso (só ADMIN) ----
+  listar: (status) => api.get('/admin/usuarios', { params: { status } }).then(corpo), // GET lista usuários (filtra por status)
+  alterarStatus: (id, status) => api.patch(`/admin/usuarios/${id}/status`, { status }).then(corpo), // PATCH APROVADO | BLOQUEADO | PENDENTE
+}
+
+export const uploadService = { // ---- envio da planilha ----
+  enviarValidadas: (dados) => api.post('/uploads/validadas', dados).then(corpo), // POST só com as linhas aprovadas pelo Pinia
+  listar: () => api.get('/uploads').then(corpo), // GET lista de lotes enviados
+}
+
+export const dashboardService = { // ---- dados dos gráficos ----
+  obter: (loteId) => api.get('/dashboard', { params: { loteId } }).then(corpo), // GET -> { lote, geradoEm, estatisticas }
+}
+
+----------------------------------------------------------------------------------------------------
+ARQUIVO 2/3  frontend/src/components/BaseChart.vue
+Responsabilidade: desenhar UM gráfico com o Chart.js. Recebe tipo, rotulos e valores. Todas as telas reutilizam.
+----------------------------------------------------------------------------------------------------
+<script setup>
+// BaseChart.vue — desenha UM gráfico com Chart.js. Todas as telas reutilizam este componente.
+import { onMounted, onBeforeUnmount, ref, watch } from 'vue' // ciclo de vida: onMounted = "a tela abriu"
+import { Chart, registerables } from 'chart.js' // Chart.js: a biblioteca que desenha gráficos no <canvas>
+
+Chart.register(...registerables) // liga todos os tipos de gráfico (barra, linha, rosca...)
+
+const props = defineProps({ // o que a tela entrega ao componente
+  tipo: { type: String, default: 'bar' }, // 'bar' | 'line' | 'doughnut'
+  rotulos: { type: Array, default: () => [] }, // nomes (eixo X): Comércio, Indústria...
+  valores: { type: Array, default: () => [] }, // números (altura das barras)
+  titulo: { type: String, default: '' }, // nome da série (aparece no tooltip)
+  horizontal: Boolean, // true = barras deitadas
+})
+
+const canvas = ref(null) // aponta para o <canvas> do template
+let grafico = null // guarda o gráfico atual para poder apagar depois
+const CORES = ['#0060a9', '#d71920', '#f7941d', '#003e73', '#1f8a4c', '#52606d'] // paleta SENAI
+
+function desenhar() { // monta e desenha o gráfico
+  grafico?.destroy() // apaga o desenho antigo, se houver
+  const rosca = props.tipo === 'doughnut' // rosca usa uma cor por fatia
+  grafico = new Chart(canvas.value, { // cria o gráfico
+    type: props.tipo, // tipo
+    data: {
+      labels: props.rotulos, // nomes
+      datasets: [{
+        label: props.titulo, // nome da série
+        data: props.valores, // números vindos do banco
+        backgroundColor: rosca ? CORES : '#0060a9', // fatias coloridas ou azul
+        borderColor: '#0060a9', // cor da linha (gráfico de linha)
+        tension: 0.3, // curva suave na linha
+      }],
+    },
+    options: {
+      indexAxis: props.horizontal ? 'y' : 'x', // 'y' deita as barras
+      responsive: true, maintainAspectRatio: false, // ocupa a largura da caixa
+      plugins: { legend: { display: rosca } }, // legenda só na rosca
+      scales: rosca ? {} : { y: { beginAtZero: true } }, // eixo Y começa no zero
+    },
+  })
+}
+
+onMounted(desenhar) // desenha quando a tela abre
+watch(() => [props.rotulos, props.valores], desenhar) // redesenha se os dados mudarem
+onBeforeUnmount(() => grafico?.destroy()) // limpa ao sair da tela
+</script>
+
+<template>
+  <div class="h-64"> <!-- altura fixa da caixa do gráfico -->
+    <canvas ref="canvas"></canvas> <!-- o quadro onde o Chart.js desenha -->
+  </div>
+</template>
+
+----------------------------------------------------------------------------------------------------
+ARQUIVO 3/3  frontend/src/views/DashboardView.vue
+Responsabilidade: a página Dashboard. Busca o JSON do Python (via Spring) e usa o BaseChart para cada gráfico.
+Partes do arquivo:  <script setup> = a lógica   |   <template> = o que aparece na tela
+----------------------------------------------------------------------------------------------------
+<script setup>
+// DashboardView.vue — gráficos com os dados que o Python calculou e o banco Azure guardou.
+import { computed, onBeforeUnmount, onMounted, reactive } from 'vue' // reactive: objeto reativo só desta tela
+import { dashboardService, mensagemDeErro } from '../services/api' // chamada ao backend (sem store: só esta tela usa)
+import { useUploadStore } from '../stores/upload' // para abrir o lote recém-enviado
+import BaseChart from '../components/BaseChart.vue' // desenha gráficos
+import KpiCard from '../components/KpiCard.vue' // cartão de número
+import StatusBadge from '../components/StatusBadge.vue' // etiqueta de status
+
+const moeda = (n) => (n == null ? '—' : Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })) // 1500 -> R$ 1.500,00
+const numero = (n) => (n == null ? '—' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 2 })) // 1234.5 -> 1.234,5
+
+const dash = reactive({ // dados só desta tela (por isso não precisa de Pinia)
+  lote: null, // o lote mostrado (status, totais)
+  estatisticas: null, // JSON do Python (null enquanto o ETL não terminou)
+  erro: '', // mensagem de erro
+  carregando: false, // true durante a busca
+  async carregar(loteId) { // GET /api/dashboard
+    this.carregando = true; this.erro = '' // começa
+    try {
+      const resp = await dashboardService.obter(loteId) // pede ao Spring
+      this.lote = resp.lote; this.estatisticas = resp.estatisticas // guarda o lote e o JSON (ou null)
+    } catch (e) {
+      this.lote = null; this.estatisticas = null; this.erro = mensagemDeErro(e) // 404 = ainda não há lote processado
+    } finally {
+      this.carregando = false
+    }
+  },
+})
+const upload = useUploadStore() // acesso ao upload
+const d = computed(() => dash.estatisticas) // atalho: d.value.resumo, d.value.porSegmento...
+let relogio = null // guarda o timer de atualização
+
+// Cada gráfico lê uma lista que o Python gravou no JSON e separa em "nomes" e "números".
+const seg = computed(() => d.value?.porSegmento ?? []) // clientes por segmento
+const niv = computed(() => d.value?.porNivel ?? []) // clientes por nível
+const con = computed(() => d.value?.porConsultor ?? []) // faturamento por consultor
+const ser = computed(() => d.value?.porServico ?? []) // serviços mais contratados
+const mes = computed(() => d.value?.porMes ?? []) // contratações por mês
+
+async function buscar() { // pede os dados ao Spring
+  await dash.carregar(upload.lote?.id) // se acabou de enviar, usa esse lote; senão o último processado
+  const esperando = dash.lote && !dash.estatisticas // lote existe, mas o Python ainda não terminou
+  if (esperando && !relogio) relogio = setInterval(buscar, 5000) // pergunta de novo a cada 5 s
+  if (!esperando && relogio) { clearInterval(relogio); relogio = null } // terminou: para o timer
+}
+
+onMounted(buscar) // busca ao abrir a tela
+onBeforeUnmount(() => relogio && clearInterval(relogio)) // limpa o timer ao sair
+</script>
+
+<template>
+  <section>
+    <h1 class="text-2xl font-bold text-azul-escuro mb-1">Gráficos da carteira</h1>
+    <p v-if="dash.lote" class="text-cinza mb-4 flex flex-wrap items-center gap-2">
+      Lote {{ dash.lote.id }} · {{ dash.lote.arquivoNome }} <StatusBadge :status="dash.lote.status" />
+    </p>
+
+    <p v-if="dash.erro" class="bg-orange-50 text-orange-700 rounded p-3">{{ dash.erro }} <RouterLink to="/upload" class="underline font-semibold">Enviar planilha</RouterLink></p>
+    <p v-else-if="dash.carregando && !d" class="text-cinza">Carregando...</p>
+    <p v-else-if="dash.lote && !d" class="bg-azul-claro text-azul-escuro rounded p-3">O Python está processando a planilha. Esta tela atualiza sozinha.</p>
+
+    <template v-if="d">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6"> <!-- cartões de resumo -->
+        <KpiCard titulo="Clientes" :valor="String(d.resumo.totalClientes)" />
+        <KpiCard titulo="Faturamento total" :valor="moeda(d.resumo.faturamentoTotal)" />
+        <KpiCard titulo="Média" :valor="moeda(d.resumo.media)" destaque /> <!-- média calculada pelo Python -->
+        <KpiCard titulo="Mediana" :valor="moeda(d.resumo.mediana)" />
+        <KpiCard titulo="Desvio padrão" :valor="moeda(d.resumo.desvioPadrao)" />
+      </div>
+
+      <div class="grid gap-4 lg:grid-cols-2"> <!-- 1 coluna no celular, 2 no computador -->
+        <div class="bg-white rounded-lg p-4 shadow-sm">
+          <h2 class="font-bold text-azul-escuro mb-2">Clientes por segmento</h2>
+          <BaseChart tipo="bar" titulo="Clientes" :rotulos="seg.map((x) => x.segmento)" :valores="seg.map((x) => x.clientes)" />
+        </div>
+        <div class="bg-white rounded-lg p-4 shadow-sm">
+          <h2 class="font-bold text-azul-escuro mb-2">Clientes por nível</h2>
+          <BaseChart tipo="doughnut" :rotulos="niv.map((x) => 'Nível ' + x.nivel)" :valores="niv.map((x) => x.clientes)" />
+        </div>
+        <div class="bg-white rounded-lg p-4 shadow-sm">
+          <h2 class="font-bold text-azul-escuro mb-2">Faturamento por consultor</h2>
+          <BaseChart tipo="bar" horizontal titulo="Faturamento" :rotulos="con.map((x) => x.consultor)" :valores="con.map((x) => x.faturamentoTotal)" />
+        </div>
+        <div class="bg-white rounded-lg p-4 shadow-sm">
+          <h2 class="font-bold text-azul-escuro mb-2">Serviços mais contratados</h2>
+          <BaseChart tipo="bar" horizontal titulo="Contratos" :rotulos="ser.map((x) => x.servico)" :valores="ser.map((x) => x.contratos)" />
+        </div>
+        <div class="bg-white rounded-lg p-4 shadow-sm lg:col-span-2">
+          <h2 class="font-bold text-azul-escuro mb-2">Contratações por mês</h2>
+          <BaseChart tipo="line" titulo="Clientes" :rotulos="mes.map((x) => x.mes)" :valores="mes.map((x) => x.clientes)" />
+        </div>
+      </div>
+
+      <div v-if="d.insights?.length" class="bg-azul-claro rounded-lg p-4 mt-6"> <!-- frases geradas pelo Python -->
+        <h2 class="font-bold text-azul-escuro mb-2">O que os dados mostram</h2>
+        <ul class="list-disc pl-5 space-y-1 text-sm"><li v-for="i in d.insights" :key="i">{{ i }}</li></ul>
+      </div>
+      <p class="text-xs text-cinza mt-4">Linhas recebidas: {{ numero(d.qualidade?.linhasRecebidas) }} · válidas: {{ numero(d.qualidade?.linhasValidas) }}</p>
+    </template>
+  </section>
+</template>
+
+----------------------------------------------------------------------------------------------------
+EXPLICAÇÃO DO DashboardView.vue, BLOCO A BLOCO
+  import ...                 traz as ferramentas: reactive/computed (Vue), dashboardService (chamada ao Spring),
+                             BaseChart (gráfico), KpiCard (cartão de número), StatusBadge (etiqueta do status).
+  const dash = reactive(...) guarda lote, estatisticas (o JSON do Python), erro e carregando. O método carregar()
+                             chama o Spring e preenche esses campos. Se der erro, mostra a mensagem na tela.
+  const d = computed(...)    atalho para dash.estatisticas. Use d.resumo, d.porSegmento, etc.
+  const seg, niv, con...     cada um pega UMA lista do JSON (ou lista vazia se ainda não chegou).
+  async function buscar()    busca ao abrir a tela. Se o lote existe mas o Python ainda não terminou,
+                             pergunta de novo a cada 5 segundos (setInterval) até o resultado chegar.
+  onMounted / onBeforeUnmount  abre a busca ao entrar na tela e para o relógio ao sair.
+  <template>                 mostra: erro, "Carregando...", "O Python está processando..." ou os cartões e gráficos.
+  <KpiCard ...>              cartões: clientes, faturamento, média, mediana e desvio (calculados pelo Python).
+  <BaseChart ...>            um por gráfico: tipo (bar, line, doughnut), rotulos (nomes) e valores (números).
+  v-if="d"                   só desenha os gráficos quando o JSON já chegou (evita erro com dados vazios).
+
+PARA ONDE VAI CADA GRÁFICO (resumo)
+  Clientes por segmento ........ porSegmento  -> barras        (segmento, clientes)
+  Clientes por nível ........... porNivel      -> rosca         (nivel, clientes)
+  Faturamento por consultor .... porConsultor  -> barras deitadas (consultor, faturamentoTotal)
+  Serviços mais contratados .... porServico    -> barras deitadas (servico, contratos)
+  Contratações por mês ......... porMes        -> linha         (mes, clientes)
+
+RESUMO FINAL DO CAMINHO COMPLETO
+  Planilha -> Pinia valida -> Spring revalida e salva -> Java (PythonEtlService) faz POST /etl ->
+  Python limpa, calcula e grava no Azure -> Spring lê estatistica_lote -> front desenha no chart.
+====================================================================================================

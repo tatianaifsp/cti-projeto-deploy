@@ -1,0 +1,165 @@
+=====================================================================
+ COMO FAZER O BUILD DO PROJETO · CTI INSIGHTS
+ Projeto Integrador SENAI · ADS
+=====================================================================
+
+Siga na ordem. Marque [x] em cada passo feito.
+Todos os comandos são no terminal do VS Code, a partir da pasta do projeto.
+Use "cd .." para voltar à pasta do projeto entre uma parte e outra.
+
+---------------------------------------------------------------------
+ O QUE É O BUILD
+---------------------------------------------------------------------
+Build é transformar o código que você escreve na versão final, que
+roda no servidor. Se o build funciona no seu computador, funciona na
+nuvem (Render, Azure, Vercel).
+
+  Pasta              Comando                          Gera                         Vai para
+  -----------------  -------------------------------  ---------------------------  ------------------
+  frontend/          npm run build                    pasta dist/ (HTML, JS, CSS)  Vercel
+  backend/           mvn clean package -DskipTests    target/cti-provedor-api.jar  Render ou Azure
+  analytics-python/  (não tem build: Python roda      nada novo; só instala        Render ou Azure
+                     direto) pip install -r ...       as bibliotecas
+
+As pastas geradas (dist, target, node_modules, .venv, __pycache__)
+NÃO vão para o GitHub: estão no .gitignore. Cada plataforma gera de
+novo na nuvem.
+
+
+=====================================================================
+ 1. FRONT-END (Vue + Vite) · pasta frontend
+=====================================================================
+
+  cd frontend
+  npm install
+      -> baixa as bibliotecas do package.json para node_modules
+         (só na primeira vez ou quando o package.json mudar)
+
+  npm run build
+      -> o Vite junta e diminui todo o código em poucos arquivos
+         Deu certo quando aparece:  ✓ built in ...
+         e é criada a pasta frontend/dist (index.html + assets/)
+
+  npm run preview
+      -> abre o site JÁ BUILDADO em http://localhost:4173
+         (diferente do npm run dev, que usa a porta 5173)
+         Ctrl+C para parar
+
+[ ] npm install sem erro
+[ ] npm run build -> "built in ..." e pasta dist criada
+[ ] npm run preview -> o site abre em localhost:4173
+
+ATENÇÃO: o VITE_API_URL é gravado DENTRO do build.
+  - No computador, ele vem do frontend/.env (http://localhost:8080/api)
+  - Na Vercel, ele vem da variável do painel (endereço do Java + /api)
+  - Mudou o VITE_API_URL? Precisa fazer o build de novo (na Vercel: Redeploy)
+
+
+=====================================================================
+ 2. BACK-END (Java + Spring Boot) · pasta backend
+=====================================================================
+
+  cd backend
+  mvn clean package -DskipTests
+      -> clean    apaga a pasta target antiga
+      -> package  compila o código e empacota tudo num arquivo .jar
+      -> -DskipTests  pula os testes automáticos (mais rápido)
+         Deu certo quando aparece:  BUILD SUCCESS
+         e é criado backend/target/cti-provedor-api.jar
+         (o nome vem do <finalName> do pom.xml)
+
+  java -jar target/cti-provedor-api.jar
+      -> liga o backend a partir do .jar, como o servidor faz
+         Deu certo quando aparece:  Started CtiProvedorApplication
+         Teste: http://localhost:8080/api/health -> {"status":"ok"}
+         Ctrl+C para parar
+
+[ ] mvn clean package -DskipTests -> BUILD SUCCESS
+[ ] arquivo target/cti-provedor-api.jar existe
+[ ] java -jar ... liga e /api/health responde
+
+Na primeira vez o Maven baixa muitas bibliotecas: pode demorar alguns
+minutos. Nas próximas vezes é rápido.
+
+O .jar lê o backend/.env só quando você roda de dentro da pasta backend.
+No servidor, as variáveis vêm do painel (Render) ou das configurações (Azure).
+
+
+=====================================================================
+ 3. PYTHON (FastAPI) · pasta analytics-python
+=====================================================================
+Python não tem build: o código roda direto. O "build" aqui é instalar
+as bibliotecas e conferir que tudo liga.
+
+  cd analytics-python
+  pip install -r requirements.txt
+      -> instala fastapi, uvicorn, pandas, numpy, scipy, SQLAlchemy,
+         psycopg e python-dotenv
+         Deu certo quando aparece:  Successfully installed ...
+         (ou "Requirement already satisfied" se já estava instalado)
+
+  python testar_conexao.py
+      -> confere se o Python conecta no banco (usa o .env)
+
+  uvicorn api:app --port 8000
+      -> liga a API
+         Deu certo quando aparece:  Application startup complete
+         Teste: http://localhost:8000/saude -> {"status":"ok"}
+         Ctrl+C para parar
+
+[ ] pip install sem erro
+[ ] testar_conexao.py conecta no banco
+[ ] uvicorn liga e /saude responde
+
+Na nuvem, a plataforma roda o mesmo "pip install -r requirements.txt"
+sozinha. Por isso todo import dos arquivos .py precisa estar no
+requirements.txt.
+
+
+=====================================================================
+ 4. CONFERIR O PROJETO INTEIRO (antes do deploy)
+=====================================================================
+Com os 3 ligados ao mesmo tempo (3 terminais):
+  Terminal 1:  cd analytics-python  ->  uvicorn api:app --port 8000
+  Terminal 2:  cd backend           ->  java -jar target/cti-provedor-api.jar
+  Terminal 3:  cd frontend          ->  npm run preview
+
+[ ] Abrir http://localhost:4173 -> login com o admin
+[ ] Enviar sample-data/dados.xlsx -> 32 válidas, 6 com erro
+[ ] Gráficos -> 32 clientes e 5 gráficos
+[ ] Teste automático: python testes/testar_tudo.py -> 0 FALHA
+
+Se tudo isso funcionar com o BUILD, o deploy vai funcionar.
+
+Por fim, enviar ao GitHub:
+  git add .
+  git status          <- confira: nenhum .env, dist ou target na lista
+  git commit -m "Build conferido"
+  git push
+
+
+=====================================================================
+ 5. ERROS COMUNS NO BUILD
+=====================================================================
+'npm' não é reconhecido
+  -> Node.js não instalado ou VS Code aberto antes de instalar: reabra o VS Code
+npm run build: "Could not resolve ..." / "Failed to resolve import"
+  -> nome de arquivo ou caminho errado num import (maiúscula/minúscula
+     importa no servidor) ou faltou npm install
+'mvn' não é reconhecido
+  -> Maven não instalado ou fora do PATH
+mvn: "release version 21 not supported" / "invalid target release"
+  -> o Maven está usando um Java antigo: java -version deve mostrar 21
+mvn: BUILD FAILURE com "cannot find symbol"
+  -> erro de código Java: a mensagem mostra o arquivo e a linha
+java -jar: "Unable to access jarfile"
+  -> rode de dentro da pasta backend, ou o build não terminou
+java -jar: "password authentication failed"
+  -> senha do banco errada no backend/.env
+pip: "No matching distribution found"
+  -> versão do Python antiga: use Python 3.11 ou 3.12
+ModuleNotFoundError: No module named '...'
+  -> faltou pip install -r requirements.txt (ou a biblioteca não está
+     no requirements.txt: acrescente e instale de novo)
+Porta em uso (Address already in use / Port 8080 was already in use)
+  -> já tem outro terminal rodando o mesmo serviço: feche com Ctrl+C

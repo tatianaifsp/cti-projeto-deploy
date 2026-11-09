@@ -1,0 +1,265 @@
+=====================================================================
+ DEPLOY NA PRÁTICA · RENDER + VERCEL · CTI INSIGHTS
+ Projeto Integrador SENAI · ADS
+=====================================================================
+
+Siga na ordem. Marque [x] em cada passo feito.
+Troque SEUNOME pelo seu nome em todos os endereços.
+
+---------------------------------------------------------------------
+ VISÃO GERAL: O QUE É O DEPLOY
+---------------------------------------------------------------------
+Deploy é tirar o sistema do seu computador e colocar na internet.
+Depois, qualquer pessoa abre um link e usa, com seu PC desligado.
+
+  Parte    Hoje (seu computador)            Depois (internet)
+  -------  -------------------------------  ----------------------------------
+  Site     npm run dev -> localhost:5173    Vercel -> cti-front-SEUNOME.vercel.app
+  Java     mvn spring-boot:run -> :8080     Render -> cti-api-SEUNOME.onrender.com
+  Python   uvicorn -> :8000                 Render -> cti-python-SEUNOME.onrender.com
+  Banco    Neon (ou Azure)                  continua onde está
+
+O .env NÃO vai junto: as senhas dele são digitadas de novo no painel
+de cada serviço (por isso há tantas variáveis).
+
+Ordem: PREPARAR -> PYTHON -> JAVA -> SITE -> AVISAR O JAVA (CORS) -> TESTAR
+
+
+=====================================================================
+ PASSO 0 · PREPARAR
+=====================================================================
+
+--- 0.1 Contas (nada para instalar) --------------------------------
+Git, Java, Maven, Node e Python você já tem. Docker NÃO precisa.
+
+[ ] Render: render.com -> Get Started -> GitHub -> autorize o repositório
+[ ] Vercel: vercel.com/signup -> Continue with GitHub -> plano Hobby
+[ ] Neon:   neon.tech -> Sign up com GitHub (já tem o banco? pule)
+[ ] GitHub: a que você já usa, com o projeto enviado
+
+--- 0.2 Criar frontend/vercel.json ----------------------------------
+VS Code -> botão direito na pasta frontend -> New File -> vercel.json
+
+  {
+    "rewrites": [
+      { "source": "/(.*)",
+        "destination": "/index.html" }
+    ]
+  }
+
+  O que faz cada linha:
+  "rewrites"      -> lista de regras para "reescrever" o endereço
+  "source"        -> qualquer endereço: /dashboard, /upload, /login...
+  "destination"   -> entrega sempre o index.html (onde o Vue mora)
+
+  Por que precisa: sem ele, apertar F5 em /dashboard dá 404.
+
+[ ] vercel.json criado dentro de frontend (não na raiz)
+
+--- 0.3 Criar backend/Dockerfile ------------------------------------
+Botão direito na pasta backend -> New File -> Dockerfile
+(D maiúsculo, SEM extensão)
+
+  FROM maven:3.9-eclipse-temurin-21 AS build
+  WORKDIR /app
+  COPY pom.xml .
+  RUN mvn -q dependency:go-offline
+  COPY src ./src
+  RUN mvn -q clean package -DskipTests
+
+  FROM eclipse-temurin:21-jre
+  WORKDIR /app
+  COPY --from=build /app/target/cti-provedor-api.jar app.jar
+  EXPOSE 8080
+  ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "app.jar"]
+
+  O que faz:
+  ETAPA 1 (FROM maven...)   computador com Maven + Java 21
+    WORKDIR /app            trabalha na pasta /app
+    COPY pom.xml / RUN ...  copia o pom.xml e baixa as bibliotecas
+    COPY src / RUN ...      copia o código e gera o .jar
+  ETAPA 2 (FROM ...-jre)    computador leve, só com Java para rodar
+    COPY --from=build       traz só o .jar pronto da etapa 1
+    EXPOSE 8080             avisa a porta do Java
+    ENTRYPOINT              liga o Java usando no máximo 75% da memória
+
+  Por que precisa: o Render não tem Java pronto. O Dockerfile é a
+  "receita" que ensina o Render a compilar e rodar o backend.
+
+[ ] Dockerfile criado dentro de backend
+
+--- 0.4 Criar backend/.dockerignore e enviar ao GitHub -------------
+New File na pasta backend -> .dockerignore (com o ponto)
+
+  target/
+  .env
+  .idea/
+  *.iml
+
+  Cada linha é algo que NÃO entra no Docker. O mais importante: o .env.
+
+No terminal, na pasta do projeto:
+  git add .
+  git status          <- confira: NENHUM .env na lista
+  git commit -m "Arquivos de deploy"
+  git push
+
+[ ] No site do GitHub: frontend/vercel.json, backend/Dockerfile,
+    backend/.dockerignore aparecem e NENHUM .env aparece
+
+
+=====================================================================
+ PASSO 1 · BUILD EM CADA PASTA (no seu computador)
+=====================================================================
+Se compila aqui, compila na nuvem. Use cd .. para voltar entre um e outro.
+
+  cd frontend
+  npm install
+  npm run build                    -> "built in ..." e pasta dist
+
+  cd ../backend
+  mvn clean package -DskipTests    -> BUILD SUCCESS
+
+  cd ../analytics-python
+  pip install -r requirements.txt  -> "Successfully installed ..."
+
+[ ] Os 3 builds deram certo
+
+
+=====================================================================
+ PASSO 2 · SEGURANÇA + RENDER
+=====================================================================
+
+--- 2.1 Gerar os segredos (anote num bloco de notas) ---------------
+Terminal do VS Code:
+
+  python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+[ ] 1ª vez -> anote como JWT_SECRET
+[ ] 2ª vez (sai outro texto) -> anote como ETL_KEY (o mesmo vale para ETL_API_KEY)
+[ ] Escolha ADMIN_EMAIL e ADMIN_PASSWORD (senha forte, nunca a do .env.example)
+[ ] Anote os dados do banco Neon:
+    postgresql://USUARIO:SENHA@HOST/BANCO?sslmode=require
+
+ATENÇÃO: a senha do banco já foi para o GitHub ou num .zip?
+Neon -> Roles -> Reset password -> use a nova.
+
+--- 2.2 Python no Render (PRIMEIRO) --------------------------------
+render.com -> + New -> Web Service -> escolha o repositório
+
+  Name ............ cti-python-SEUNOME
+  Root Directory .. analytics-python
+  Language ........ Python 3
+  Build Command ... pip install -r requirements.txt
+  Start Command ... uvicorn api:app --host 0.0.0.0 --port $PORT
+  Instance Type ... Free
+  Health Check .... /saude
+
+  Environment Variables:
+  DB_HOST ......... HOST do Neon
+  DB_PORT ......... 5432
+  DB_NAME ......... BANCO do Neon (ex.: neondb)
+  DB_USER ......... USUARIO do Neon
+  DB_PASSWORD ..... SENHA do Neon
+  DB_SSLMODE ...... require
+  ETL_API_KEY ..... o ETL_KEY anotado
+
+[ ] Create Web Service -> "Your service is live"
+[ ] Abrir https://cti-python-SEUNOME.onrender.com/saude -> {"status":"ok"}
+[ ] Anotar o endereço do Python
+
+--- 2.3 Java no Render (DEPOIS) ------------------------------------
++ New -> Web Service -> mesmo repositório
+
+  Name ............ cti-api-SEUNOME
+  Root Directory .. backend
+  Language ........ Docker  (usa o Dockerfile)
+  Instance Type ... Free
+  Health Check .... /api/health
+
+  Environment Variables:
+  DB_URL .......... jdbc:postgresql://HOST/BANCO?sslmode=require
+  DB_USER ......... USUARIO do banco
+  DB_PASSWORD ..... SENHA do banco
+  JWT_SECRET ...... o JWT_SECRET anotado
+  ETL_KEY ......... o ETL_KEY anotado (igual ao ETL_API_KEY)
+  ETL_URL ......... https://cti-python-SEUNOME.onrender.com/etl
+  ADMIN_EMAIL ..... seu e-mail de admin
+  ADMIN_PASSWORD .. sua senha forte
+  (CORS_ORIGINS fica para o passo 3)
+
+[ ] Primeiro build: 5 a 8 minutos
+[ ] Abrir https://cti-api-SEUNOME.onrender.com/api/health -> {"status":"ok"}
+[ ] Anotar o endereço do Java
+
+
+=====================================================================
+ PASSO 3 · VERCEL + CORS
+=====================================================================
+vercel.com -> Add New -> Project -> Import o repositório
+
+  Project Name ......... cti-front-SEUNOME
+  Framework Preset ..... Vite
+  Root Directory ....... frontend
+  Build / Output ....... npm run build · dist (já vem preenchido)
+  Environment Variable . VITE_API_URL = https://cti-api-SEUNOME.onrender.com/api
+
+[ ] Deploy -> "Congratulations"
+[ ] Anotar https://cti-front-SEUNOME.vercel.app
+
+AVISAR O JAVA (CORS) - último passo:
+Render -> cti-api-SEUNOME -> Environment -> Add
+  CORS_ORIGINS = https://cti-front-SEUNOME.vercel.app   (SEM / no fim)
+-> Save. O Java reinicia sozinho.
+
+[ ] CORS_ORIGINS salvo
+
+
+=====================================================================
+ PASSO 4 · TESTAR (nesta ordem)
+=====================================================================
+[ ] 1. cti-python-...onrender.com/saude ....... {"status":"ok"}
+[ ] 2. cti-api-...onrender.com/api/health ..... {"status":"ok"}
+[ ] 3. cti-front-....vercel.app ............... tela inicial do site
+[ ] 4. Login com o admin ...................... entra, sem erro de CORS
+[ ] 5. Enviar sample-data/dados.xlsx .......... "Enviado! ... linhas válidas"
+[ ] 6. /dashboard e depois F5 ................. 32 clientes, 5 gráficos, continua na tela
+
+Teste automático (do seu computador):
+  python testes/testar_tudo.py --back https://cti-api-SEUNOME.onrender.com --python https://cti-python-SEUNOME.onrender.com
+[ ] Resultado com 0 FALHA
+
+O primeiro acesso pode demorar até 1 minuto: o Render grátis "dorme"
+depois de 15 minutos parado.
+
+ENTREGA: link do site, link do /api/health, link do GitHub e um print
+do dashboard.
+
+
+=====================================================================
+ PASSO 5 · ERROS COMUNS
+=====================================================================
+blocked by CORS policy (F12)
+  -> CORS_ORIGINS = endereço exato da Vercel, sem / no fim
+404 ao apertar F5 no /dashboard
+  -> falta o frontend/vercel.json no GitHub
+"Não consegui falar com o servidor"
+  -> VITE_API_URL errado (https e /api no fim) -> Redeploy na Vercel
+Upload com erro 502 ou 503
+  -> Python dormindo ou ETL_URL errado: abra /saude e envie de novo
+Log: password authentication failed
+  -> DB_USER ou DB_PASSWORD errado no Render
+Log: Chave do ETL inválida
+  -> ETL_KEY (Java) diferente de ETL_API_KEY (Python)
+Log: Could not resolve placeholder
+  -> falta uma variável no Render (o nome aparece no erro)
+Build do Render falhou
+  -> Root Directory errado, ou falta o Dockerfile na pasta backend
+Primeiro acesso muito lento
+  -> normal no grátis: espere 1 minuto
+
+Onde olhar: Render -> Logs · Vercel -> Deployments -> Build Logs ·
+Site -> F12 -> Console
+
+SEGURANÇA: os valores reais ficam SÓ no bloco de notas e nos painéis.
+Nunca no código, no GitHub, em prints ou em slides.
